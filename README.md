@@ -1,17 +1,18 @@
 # Chronos ⏱️
 
 > **Production-Grade, Multi-Tenant, Event-Driven Routing and SLA Orchestration Engine**  
-> Built with NestJS (TypeScript, Strict Mode), PostgreSQL 16, Prisma ORM, Redis (BullMQ & Lua Scripts), Socket.io, Luxon, and Docker.
+> Built with NestJS (TypeScript, Strict Mode), Next.js 15 (App Router, React 19, Tailwind CSS), PostgreSQL 16, Prisma ORM, Redis (BullMQ & Lua Scripts), Socket.io, Luxon, and Docker.
 
 ---
 
 ## 🏗️ System Architecture Overview
 
-Chronos is an enterprise-grade ticket routing and SLA orchestration engine designed for high-concurrency, multi-tenant operations with zero cross-tenant data leakage, sub-millisecond CQRS read analytics, non-blocking ticket claiming, timezone-aware business calendar SLA tracking, transactional outbox zero-loss event publishing, automated SLA breach escalations, high-throughput skill-based auto-routing, enterprise outbound webhook dispatching with HMAC-SHA256 signatures, and a **horizontally scalable real-time WebSocket War-Room Gateway backed by Redis Pub/Sub**.
+Chronos is an enterprise-grade ticket routing and SLA orchestration engine designed for high-concurrency, multi-tenant operations with zero cross-tenant data leakage, sub-millisecond CQRS read analytics, non-blocking ticket claiming, timezone-aware business calendar SLA tracking, transactional outbox zero-loss event publishing, automated SLA breach escalations, high-throughput skill-based auto-routing, enterprise outbound webhook dispatching with HMAC-SHA256 signatures, a **horizontally scalable real-time WebSocket War-Room Gateway backed by Redis Pub/Sub**, and an interactive mission-control frontend (`chronos-web`) equipped with a live Concurrency & Chaos Simulator.
 
 ```
                               ┌───────────────────────────────────┐
                               │    Client (HTTP / WebSocket)      │
+                              │    chronos-web (Next.js 15 UI)    │
                               └─────────────────┬─────────────────┘
                                                 │
                           x-tenant-id / Bearer JWT / Correlation ID
@@ -30,15 +31,16 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
         │ • SKIP LOCKED Claim  │    │ • Redis Skill ZSETs  │    │ • WebSockets Gateway │
         │ • Audit Logging      │    │ • Overflow SKIP LOCK │    └──────────┬───────────┘
         │ • Dual-Write Outbox  │    │ • Workload Matcher   │               │
-        └──────────┬───────────┘    └──────────┬───────────┘               ▼
-                   │ (ACID Transaction)        │                ┌──────────────────────┐
-                   ▼                           │                │   WebhooksModule     │
-        ┌──────────────────────┐               │                │ • AES-256-GCM Secret │
-        │    PostgreSQL 16     │               │                │ • HMAC-SHA256 Sign   │
-        │ • Tickets & Audits   │               │                │ • Redis Circuit Brk  │
-        │ • agent_skills       │               │                │ • 5s Hard Timeout    │
-        │ • webhook_endpoints  │               │                │ • Jitter Backoff     │
-        │ • outbox_events      │               │                │ • Dead Letter Queue  │
+        │ • Burst Simulator    │    └──────────┬───────────┘               ▼
+        └──────────┬───────────┘               │                ┌──────────────────────┐
+                   │ (ACID Transaction)        │                │   WebhooksModule     │
+                   ▼                           │                │ • AES-256-GCM Secret │
+        ┌──────────────────────┐               │                │ • HMAC-SHA256 Sign   │
+        │    PostgreSQL 16     │               │                │ • Redis Circuit Brk  │
+        │ • Tickets & Audits   │               │                │ • 5s Hard Timeout    │
+        │ • agent_skills       │               │                │ • Jitter Backoff     │
+        │ • webhook_endpoints  │               │                │ • Dead Letter Queue  │
+        │ • outbox_events      │               │                │ • DLQ Replay Engine  │
         │ • pg_notify trigger  │               │                └──────────┬───────────┘
         └──────────┬───────────┘               │                           │
                    │                           │                           ▼
@@ -58,6 +60,7 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
         │ • sla.warning (80%)  │            │ • 80% Warning Job    │
         │ • sla.breach (100%)  │            │ • 100% Breach Bump   │
         │ • Deterministic IDs  │            │ • Freeze / Unfreeze  │
+        │ • Deadline Calc API  │            │ • Business Schedules │
         └──────────────────────┘            └──────────────────────┘
 ```
 
@@ -65,52 +68,56 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
 
 ## ⚡ Core Engineering Pillars
 
-### 1. Frontend Mission-Control Dashboard (`chronos-web`) (Phase 10)
+### 1. Frontend Mission-Control Dashboard (`chronos-web`) (Phases 10, 11 & 12)
 - **Linear/Vercel-Inspired Dark Theme System**:
   - High-contrast operational shell built on Next.js 15 (App Router, React 19, TypeScript strict mode) and Tailwind CSS.
-  - Deep `slate-950` canvas (`#020617`), subtle `slate-800` borders, and high-visibility status telemetry:
-    - **Emerald** (`emerald-400`): Healthy queue status & active connections.
-    - **Amber** (`amber-400`): SLA Warnings ($\ge 80\%$ duration limit).
-    - **Rose with Pulsing Glow** (`rose-400` / `animate-pulse-glow`): SLA Breaches ($100\%$ limit) with escalation warnings.
-    - **Cyan** (`cyan-400`): Paused / `ON_HOLD` tickets and frozen timers.
+  - Deep `slate-950` canvas (`#020617`), subtle `slate-800` borders, and semantic status telemetry:
+    - **Emerald** (`emerald-400`): Healthy queue status, active connections, and in-business-hours operation.
+    - **Amber** (`amber-400`): SLA Warnings ($\ge 80\%$ duration limit) and half-open circuit probes.
+    - **Rose with Pulsing Glow** (`rose-400` / `animate-pulse-glow`): SLA Breaches ($100\%$ limit) and tripped circuit breakers.
+    - **Cyan** (`cyan-400`): Paused / `ON_HOLD` tickets and frozen business-schedule intervals.
 - **4 Operational Hub Routes**:
-  - **`/war-room`**: Real-time SLA Countdown, live incident stream, pre-aggregated CQRS metric counters, and priority distribution.
-  - **`/workspace`**: Atomic non-blocking ticket claiming (`SKIP LOCKED`), agent capacity meter ($2/5$ load), and State Machine DAG progression (`OPEN` $\rightarrow$ `ASSIGNED` $\rightarrow$ `IN_PROGRESS` $\rightarrow$ `ON_HOLD` $\rightarrow$ `RESOLVED` $\rightarrow$ `CLOSED`).
-  - **`/admin/calendars`**: Timezone business schedules (`America/New_York`, `Asia/Kolkata`, `Europe/London`), holiday exclusions, and business-time SLA deadline calculation simulator.
-  - **`/admin/webhooks`**: Enterprise outbound webhooks, HMAC-SHA256 signatures, Redis sliding-window circuit breaker states (`CLOSED`, `OPEN`, `HALF_OPEN`), and Dead Letter Queue (DLQ) 1-click re-drives.
-- **Multi-Tenant & Agent Context Switcher (`TenantContextProvider`)**:
-  - Global navigation dropdown allows switching between corporate tenants (`Acme Corp`, `Stark Industries`, `Globex Corp`) and agent personas (`Admin`, `Agent 1`, `Agent 2`).
-  - Automatically signs client-side HS256 JWT tokens using the native Web Crypto API, injects `x-tenant-id` and `Authorization: Bearer <token>` into the centralized Axios client, and resets the TanStack Query cache (`queryClient.resetQueries()`) to guarantee zero cross-tenant cache bleeding.
-- **Real-Time WebSocket Synchronization (`WarRoomSocketProvider`)**:
-  - Connects to the NestJS `/war-room` Socket.IO gateway with automatic reconnection and live latency tracking (`LIVE - <24ms`, `RECONNECTING`, `OFFLINE`).
-  - Intercepts `metrics.updated` (250ms debounced deltas), `sla.warning`, `sla.breach`, and `ticket.claimed`, directly patching the TanStack Query cache (`queryClient.setQueryData`) for instantaneous live dashboard updates without page reloads.
+  - **`/war-room`**: Real-time SLA Countdown Grid, live incident stream, pre-aggregated CQRS metric counters (`Active Open`, `At-Risk ≥80%`, `Breached 100%`, `Paused On-Hold`, `Agent Capacity`), and priority tabs.
+  - **`/workspace`**: Agent Queue & Claiming Desk, live status toggle (`ONLINE`, `BUSY`, `OFFLINE`), registered skill proficiency badges (1–5 stars), live capacity meter ($3/5$ load), atomic claim CTA (`POST /tickets/claim-next`), and `<TicketDetailDrawer />` enforcing strict lifecycle transitions with an immutable `<AuditLogTimeline />`.
+  - **`/admin/calendars`**: IANA Timezone selector with live local clock, real-time operating pill (`IN BUSINESS HOURS` vs `OUTSIDE BUSINESS HOURS (SLA FROZEN)`), 7-day visual weekly schedule matrix, Holiday Calendar manager, and interactive **"SLA Deadline Calculator Preview"** card with roll-over arithmetic traces.
+  - **`/admin/webhooks`**: Enterprise outbound webhooks, HMAC-SHA256 signatures, Redis sliding-window circuit breaker monitors (`CLOSED - Healthy`, `HALF_OPEN - Probing`, `OPEN - Tripped`), delivery log inspection drawer, and Dead Letter Queue (DLQ) 1-click re-drives (`POST /webhooks/dlq/:id/replay`).
+- **Interactive Concurrency & Chaos Simulator Drawer (`<ChaosSimulatorDrawer />`)**:
+  - Pinned floating DevTools drawer accessible from every page for live demos:
+    - **"Simulate 20 Ticket Burst"**: Rapidly dispatches 20 tickets across randomized priorities and skill tags to light up the War-Room counters and auto-routing ZSETs.
+    - **"Test SKIP LOCKED Race Condition (50 Concurrent Claims)"**: Fires 50 simultaneous `Promise.all` requests against `/tickets/claim-next` and renders a 50-cell visual claim matrix proving **0 duplicate collisions** under extreme concurrency.
+    - **"Trip Webhook Circuit Breaker"**: Simulates 10 rapid 500-error webhook delivery callbacks to trip the Redis circuit breaker from `CLOSED` to `OPEN` in real time with an active cooldown countdown.
 
-### 2. Horizontally Scalable WebSocket War-Room Gateway (Phase 9)
-- **Horizontally Scalable Redis Pub/Sub Adapter (`RedisIoAdapter`)**:
-  - Implements a custom NestJS `IoAdapter` integrated with `@socket.io/redis-adapter` and `ioredis` pub/sub duplex clients.
-  - Enables multiple containerized Chronos API replicas to broadcast real-time telemetry across cluster nodes seamlessly without sticky sessions or message drops.
-- **Multi-Tenant Handshake Authentication & Strict Room Isolation (`WarRoomGateway`)**:
-  - Authenticates WebSocket clients at connection time via JWT tokens in `client.handshake.auth.token` (with fallback to headers/query).
-  - Validates tenant and user claims, immediately terminating unauthenticated or cross-tenant spoofing attempts.
-  - Automatically partitions clients into isolated Socket.IO rooms:
-    - `tenant:${tenantId}:war-room`: Broadcasts tenant-wide operational metrics, queue counts, and SLA warnings/breaches.
-    - `tenant:${tenantId}:agent:${userId}`: Delivers personal push-routed ticket assignments directly to the matched agent.
-  - Zero cross-tenant data leakage guaranteed across socket namespaces.
-- **Sub-Millisecond Domain Event Bridges (`WarRoomEventListener`)**:
-  - Bridges internal domain events (`SlaWarningEvent`, `SlaBreachedEvent`, `TicketTransitionedEvent`, `metrics.mutated`) to the WebSocket gateway in sub-millisecond execution.
-  - Emits structured payloads containing `{ ticketId, ticketNumber, priority, status, warningAt, breachedAt, assignedAgentId }`.
-- **Throttled / Debounced Metrics Broadcast (250ms Rate-Limit)**:
-  - High-concurrency ticket mutations during load spikes accumulate counter increments (`openCount`, `atRiskCount`, `breachedCount`, `totalTickets`).
-  - Merges rapid deltas into a single consolidated payload broadcast at most once every 250ms per tenant, eliminating client browser UI thrashing while maintaining sub-second live dashboard precision.
+---
 
-### 2. Strict Multi-Tenant Isolation (`nestjs-cls`)
-- **Thread-Safe Context**: Every HTTP request and background worker binds `tenantId` to Node's `AsyncLocalStorage` via `nestjs-cls`.
-- **Tenant Context Guard**: Inspects incoming `x-tenant-id` headers and JWT token claims. If header and token tenant claims mismatch, the request is immediately rejected with HTTP 403 (`TenantAccessDeniedException`), preventing cross-tenant spoofing.
-- **Tenant-Aware Base Repository**: [`TenantAwareRepository<T>`](src/common/database/tenant-aware.repository.ts) automatically merges `where: { tenantId }` into all reads, and injects `data: { tenantId }` into all mutations. Direct entity queries by ID execute `findFirst({ where: { id, tenantId } })`, preventing cross-tenant data disclosure via guessed entity UUIDs.
+### 2. Live War-Room Countdown Matrix & 60fps Animation (Phase 11)
+- **High-Performance Non-Thrashing Countdown (`<SlaCountdownTimer />`)**:
+  - Employs a pure `requestAnimationFrame` loop updating text and progress bar widths via direct DOM references at 60fps. Eliminates React re-rendering thrashing across 20+ simultaneous countdown timers.
+  - **Visual Threshold Tiers**:
+    - **$< 80\%$ elapsed**: Emerald progress bar (`bg-emerald-500`).
+    - **$80\% - 99\%$ elapsed (`WARNING`)**: Amber glowing border (`border-amber-500/40`) and warning badge.
+    - **$100\%$ elapsed (`BREACHED`)**: Rose pulsing border (`border-rose-500/60`, `animate-pulse-glow`) and automatic corner `<BreachToastContainer />` alert.
+    - **`ON_HOLD`**: Cyan `"FROZEN"` badge where the millisecond timer visibly locks in place until resumed.
+- **Strict Ticket State Machine Desk & Audit Log Timeline**:
+  - Enforces allowed transitions: `ASSIGNED` $\rightarrow$ `IN_PROGRESS` $\rightarrow$ `ON_HOLD` $\rightleftharpoons$ `IN_PROGRESS` $\rightarrow$ `RESOLVED` $\rightarrow$ `CLOSED`.
+  - Prohibits illegal transitions (e.g. `OPEN` to `CLOSED`) with explanatory disabled tooltips.
+  - Displays vertical immutable audit log entries with actor attribution, previous/new status badges, and timestamped SLA snapshots.
 
-### 2. Enterprise Outbound Webhooks with Circuit Breaker (Phase 8)
+---
+
+### 3. Timezone-Aware Business Hours & SLA Policy Calculator (Phase 5 & 12)
+- **Tenant-Specific Business Calendars (`BusinessCalendars` & `TenantHolidays`)**:
+  - Supports arbitrary IANA timezones (e.g., `America/New_York`, `Asia/Kolkata`, `Europe/London`), custom weekly active shifts (Mon–Fri 09:00–17:00), and holiday exclusions.
+- **Deterministic Wall-Clock Calculator (`SlaCalendarCalculatorService` & Client Engine)**:
+  - Takes `(startTimestamp, slaTargetMs, weeklySchedule, holidays, timezone)` and calculates exact wall-clock UTC and local timestamps for 80% (Warning) and 100% (Breach) deadlines counting **only active business operating milliseconds**.
+  - **Friday 16:30 Roll-Over Proof**: A ticket with a 4-hour (14,400,000ms) SLA arriving on Friday at 16:30 uses 30 minutes before the 17:00 shift close, freezes across Saturday and Sunday, resumes Monday at 09:00, reaches Warning at 11:42 (80%), and breaches at 12:30 (100%).
+- **Interactive Server & Client Simulator**:
+  - Available on the frontend preview card and via `POST /sla/policies/calculate-deadline`.
+
+---
+
+### 4. Enterprise Outbound Webhooks with Redis Circuit Breaker (Phase 8 & 12)
 - **AES-256-GCM Secret Encryption at Rest**:
-  - Signing secrets are never stored in plaintext. They are encrypted at rest with authenticated AES-256-GCM (`enc:v1:<iv>:<auth_tag>:<ciphertext>`), preventing secret leakage from database dumps.
+  - Signing secrets are never stored in plaintext. They are encrypted at rest with authenticated AES-256-GCM (`enc:v1:<iv>:<auth_tag>:<ciphertext>`).
 - **Cryptographic Request Signing**:
   - Outbound HTTP requests carry `X-Chronos-Signature: t={unix_timestamp},v1={HMAC_SHA256(timestamp + "." + raw_json_body, signing_secret)}`.
   - Replay attack protection with strict 300-second timestamp tolerance and timing-safe equality checks.
@@ -118,53 +125,52 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
 - **Strict 5-Second Hard Timeout**:
   - Outbound HTTP dispatches utilize `AbortSignal.timeout(5000)` to terminate unresponsive external endpoints and prevent worker pool thread exhaustion.
 - **Redis Sliding-Window Circuit Breaker (`CircuitBreakerService`)**:
-  - **CLOSED**: Normal operation. Tracks failures in a 5-minute rolling Redis window (`tenant:{tenantId}:webhook:{endpointId}:circuit:failures`). If failures reach 10 consecutive 5xx/timeout errors, the circuit trips to **OPEN** for 60 seconds and emits a tenant system alert.
+  - **CLOSED**: Normal operation. Tracks failures in a 5-minute rolling Redis window. If failures reach 10 consecutive 5xx/timeout errors, the circuit trips to **OPEN** for 60 seconds and emits a tenant system alert.
   - **OPEN**: Fast-fails immediately with 0ms response latency without opening socket connections or dispatching HTTP requests.
   - **HALF_OPEN**: After the 60s cooldown expires, exactly 1 probe request is permitted through via atomic Redis `SET NX` lock. If the probe returns 2xx, the circuit resets to **CLOSED**; if it fails, the circuit re-trips for an extended 120s cooldown.
-- **Exponential Backoff with Full Jitter**:
-  - Custom BullMQ backoff strategy prevents thundering herds on recovering endpoints:
-    $$\text{delay} = \text{base} \times 2^{\text{attempt}} + \text{random\_jitter}$$
 - **Dead Letter Queue (DLQ) & Admin Replay APIs**:
   - Failed deliveries exhaust after 5 attempts and transition to `DEAD_LETTER`.
-  - Admin APIs allow re-driving individual failures (`POST /webhooks/dlq/:deliveryId/replay`) or mass replaying all failures for an endpoint (`POST /webhooks/endpoints/:id/replay-all`).
+  - Replay individual failures (`POST /webhooks/dlq/:deliveryId/replay`) or mass replay all failures (`POST /webhooks/endpoints/:id/replay-all`).
 
-### 3. High-Throughput Skill-Based Auto-Routing Engine (Phase 7)
+---
+
+### 5. Horizontally Scalable WebSocket War-Room Gateway (Phase 9)
+- **Redis Pub/Sub Adapter (`RedisIoAdapter`)**:
+  - Enables multiple containerized Chronos API replicas to broadcast real-time telemetry across cluster nodes seamlessly without sticky sessions or message drops.
+- **Multi-Tenant Handshake Authentication & Strict Room Isolation (`WarRoomGateway`)**:
+  - Authenticates WebSocket clients at connection time via JWT tokens in `client.handshake.auth.token`.
+  - Automatically partitions clients into isolated Socket.IO rooms:
+    - `tenant:${tenantId}:war-room`: Broadcasts tenant-wide operational metrics, queue counts, and SLA warnings/breaches.
+    - `tenant:${tenantId}:agent:${userId}`: Delivers personal push-routed ticket assignments directly to the matched agent.
+- **Throttled / Debounced Metrics Broadcast (250ms Rate-Limit)**:
+  - Merges rapid deltas into a consolidated payload broadcast at most once every 250ms per tenant, eliminating browser UI thrashing.
+
+---
+
+### 6. High-Throughput Skill-Based Auto-Routing Engine (Phase 7)
 - **Redis Live Capacity Index & Composite Scoring**:
   - Maintains tenant-scoped Redis Sorted Sets: `tenant:{tenantId}:skill:{skillTag}:agents`.
-  - Member is `agentId`; score is an atomic composite routing score combining specialization proficiency ($1 \text{ to } 5$) and real-time available capacity ratio:
+  - Score is an atomic composite routing score combining specialization proficiency ($1 \text{ to } 5$) and real-time available capacity ratio:
     $$\text{score} = (\text{proficiency} \times 100) + \left(\frac{\text{max\_capacity} - \text{active\_load}}{\text{max\_capacity}}\right) \times 50$$
-  - Top candidate scores reach up to 550 (Proficiency 5, 0 active load). As active load increments, the score scales downward linearly.
 - **Atomic Lua Claim Script (`claim_best_agent.lua`)**:
   - Inspects candidate agents in required skill `ZSET` from highest score to lowest in a single Redis round-trip.
-  - Validates candidate online status and capacity headroom (`active_load < max_capacity`).
   - Atomically increments load and updates skill ZSETs.
 - **Backpressure & Overflow Queue Fallback**:
-  - Saturated tickets remain in `OPEN` status within the overflow pool.
-  - When capacity is freed (`agent.capacity_freed`), the engine automatically queries and locks the highest-priority waiting ticket using PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED`.
+  - Saturated tickets remain in `OPEN` status within the overflow pool. Automatically drained via `SELECT ... FOR UPDATE SKIP LOCKED` when capacity is freed.
 
-### 4. Atomic Non-Blocking Ticket Claim Engine (`SKIP LOCKED`)
+---
+
+### 7. Atomic Non-Blocking Ticket Claim Engine (`SKIP LOCKED`)
 - High-concurrency claiming via PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED`.
 - When 50 concurrent agents hit `POST /tickets/claim-next` at the exact same millisecond:
   - Each transaction acquires exactly one unassigned ticket.
   - Concurrent transactions encountering locked rows **skip them immediately** without queuing or blocking database connection pools.
   - Zero deadlocks, zero lock-wait timeouts, and zero race conditions.
-  - Benchmarked under load: **20 concurrent claims resolved in 22–27ms**.
+  - Benchmarked under load: **20 concurrent claims resolved in 22–28ms**.
 
-### 5. Strict Ticket Lifecycle State Machine
-- Enforces an immutable Directed Acyclic Graph (DAG) of allowed lifecycle transitions:
-  $$\text{OPEN} \longrightarrow \text{ASSIGNED} \longrightarrow \text{IN\_PROGRESS} \underset{\text{resume}}{\overset{\text{hold}}{\rightleftharpoons}} \text{ON\_HOLD} \longrightarrow \text{RESOLVED} \longrightarrow \text{CLOSED}$$
-- Illegal state transitions throw a structured HTTP 400 [`InvalidStateTransitionException`](src/modules/tickets/exceptions/invalid-state-transition.exception.ts).
-- Every state transition or agent assignment writes an immutable transactional record to `TicketAuditLogs` within the same ACID transaction.
+---
 
-### 6. Timezone-Aware Business Hours & Holiday SLA Orchestration (v2.0)
-- **Tenant-Specific Business Calendars**: Supports arbitrary IANA timezones (e.g., `America/New_York`, `Europe/London`, `Asia/Kolkata`), custom weekly active shifts (e.g., Mon–Fri 09:00–17:00), and holiday exclusions (`TenantHolidays`).
-- **Deterministic Wall-Clock Calculator (`SlaCalendarCalculatorService`)**:
-  - Pure Luxon-based calendar algorithm calculates exact wall-clock UTC timestamps for 80% (Warning) and 100% (Breach) deadlines counting **only active business milliseconds**.
-  - Transparently handles Daylight Saving Time (DST) Fall-Back and Spring-Forward transitions without offset drift.
-- **Dynamic SLA Freeze & Resume**:
-  - Automatically freezes SLA duration when moving to `ON_HOLD`, purges pending BullMQ delayed jobs, and recalculates exact deadlines on resumption to `IN_PROGRESS`.
-
-### 7. Transactional Outbox Pattern & Zero-Loss Dual-Write Protection (Phase 6)
+### 8. Transactional Outbox Pattern & Zero-Loss Dual-Write Protection (Phase 6)
 - **Dual-Write Vulnerability Elimination**:
   - Writes the `Ticket`, `TicketAuditLog`, and `OutboxEvent` (status `PENDING`) atomically inside the **exact same PostgreSQL ACID transaction**.
 - **Hybrid Push/Poll Outbox Relay (`OutboxRelayService`)**:
@@ -172,7 +178,9 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
   - Fallback polling sweeper at `@Interval(2000)` guarantees self-healing.
   - Atomic batch fetching via `SELECT ... FOR UPDATE SKIP LOCKED` and parallel `queue.addBulk()` dispatch.
 
-### 8. CQRS Read Layer & Pre-Aggregated Redis Caching
+---
+
+### 9. CQRS Read Layer & Pre-Aggregated Redis Caching
 - Asynchronous CQRS projections maintain live tenant metric hashes: `tenant:${tenantId}:metrics:live`.
 - Atomic `HINCRBY` pipelined operations track `open_count`, `on_hold_count`, `breached_count`, `at_risk_count`, and priority counts.
 - `GET /analytics/dashboard` reads directly from Redis: **<1ms response latency** (<50ms SLA).
@@ -307,14 +315,17 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
                ├──────────────────────┐                 │ *
                │ *                    │                 ▼
 ┌──────────────┴─────────────────┐    │  ┌────────────────────────────────┐
-│      ticket_audit_logs         │    │  │     ticket_audit_logs          │
+│      ticket_audit_logs         │    │  │      ticket_audit_logs         │
 ├────────────────────────────────┤    │  └────────────────────────────────┘
 │ id: uuid (PK)                  │    │
 │ tenant_id: uuid (FK)           │    │
 │ ticket_id: uuid (FK)           │    │
 │ actor_id: uuid                 │    │
-│ action: varchar(100)           │    │
-│ changes: jsonb                 │    │
+│ from_status: TicketStatus      │    │
+│ to_status: TicketStatus        │    │
+│ reason: text                   │    │
+│ sla_remaining_ms: bigint       │    │
+│ created_at: timestamptz        │    │
 │ INDEX (tenant_id, ticket_id)   │    │
 └────────────────────────────────┘    │
 ```
@@ -332,6 +343,9 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
 git clone https://github.com/niranjan-7/chronos.git
 cd chronos
 npm install
+
+# Install Frontend dependencies
+cd chronos-web && npm install && cd ..
 ```
 
 ### 2. Start Infrastructure via Docker Compose
@@ -362,17 +376,22 @@ npm run prisma:generate
 npx prisma db push
 ```
 
-### 5. Start Application
+### 5. Start Backend & Frontend Applications
 ```bash
-# Development watch mode
+# Terminal 1: Start Backend NestJS Server (Port 3000)
 npm run start:dev
 
-# Production build & run
-npm run build
-npm run start:prod
+# Terminal 2: Start Frontend Next.js Mission Control (Port 3001)
+cd chronos-web
+npm run dev -- -p 3001
 ```
 
-Server starts at: `http://localhost:3000`
+- Backend API: `http://localhost:3000`
+- Frontend Mission Control: `http://localhost:3001`
+  - `/war-room`: Live Telemetry & SLA Countdown Matrix
+  - `/workspace`: Agent Queue & State Machine Desk
+  - `/admin/calendars`: Timezone Business Hours & SLA Policy Calculator
+  - `/admin/webhooks`: Outbound Webhooks & Circuit Breaker Console
 
 ---
 
@@ -381,56 +400,56 @@ Server starts at: `http://localhost:3000`
 Chronos includes comprehensive unit test suites and real-world concurrency integration tests:
 
 ```bash
-# Run all unit tests (87 tests passing across 11 suites)
+# Run all NestJS backend unit tests (104 tests passing across 13 suites)
 npm test
 
-# Run high-concurrency, outbox, SLA lifecycle, skill-routing, and enterprise webhook integration tests
+# Run high-concurrency, outbox, SLA lifecycle, skill-routing, and chaos integration tests (56 tests passing across 11 suites)
 npm run test:integration
+
+# Build production bundles
+npm run build                      # Backend NestJS build
+cd chronos-web && npm run build    # Frontend Next.js App Router build
 ```
 
 ### Integration Test Results
 ```
-PASS test/atomic-ticket-claim.integration.spec.ts
-  Atomic Ticket Claim Engine (SKIP LOCKED Concurrency Proof)
-    ✓ proves that 20 concurrent agents claiming 10 tickets yields zero collisions (25ms)
+PASS test/phase12-admin-chaos-simulator.integration.spec.ts
+  Phase 12: Tenant Admin Control Plane & Concurrency Chaos Simulator (Integration)
+    Timezone-Aware Business Hours & Calendar Arithmetic
+      ✓ should detect when tenant is IN BUSINESS HOURS on standard weekday shift
+      ✓ should detect when tenant is OUTSIDE BUSINESS HOURS (SLA FROZEN) on evening and weekend
+      ✓ should detect when tenant is OUTSIDE BUSINESS HOURS on tenant holiday
+      ✓ should accurately calculate Friday 16:30 SLA roll-over through weekend to Monday
+      ✓ should accurately calculate SlaCalendarCalculatorService deadlines matching frontend
+    Outbound Webhooks Circuit Breaker & DLQ Replay
+      ✓ should trip circuit breaker to OPEN when 10 consecutive failures are recorded
+      ✓ should allow manually resetting the circuit breaker to CLOSED
+    Concurrency & Chaos Simulator Engine
+      ✓ should simulate rapid burst of tickets with random priorities and skills
+      ✓ should guarantee zero race conditions on concurrent claims (SKIP LOCKED)
 
-PASS test/skill-based-routing.integration.spec.ts
-  Phase 7: High-Throughput Skill-Based & Capacity-Aware Auto-Routing Integration
-    ✓ verifies initial Redis composite scores based on proficiency and capacity
-    ✓ prioritizes highest score agent and updates live composite scores linearly
-    ✓ routes to next highest proficiency agent when top agent hits max capacity
-    ✓ activates backpressure overflow pool when all skilled agents hit max capacity
-    ✓ automatically drains overflow pool using SKIP LOCKED when agent frees capacity
+PASS test/war-room-workspace-phase11.integration.spec.ts
+  Phase 11: War-Room Telemetry Matrix & Workspace Agent Lifecycle (Integration)
+    ✓ determines HEALTHY phase when SLA elapsed is < 80%
+    ✓ determines WARNING phase when SLA elapsed is between 80% and 99%
+    ✓ determines BREACHED phase when 100% SLA elapsed or ticket is flagged breached
+    ✓ determines FROZEN phase when ticket is ON_HOLD and preserves remaining SLA
+    ✓ enforces valid state machine lifecycle: OPEN -> ASSIGNED -> IN_PROGRESS -> ON_HOLD -> RESOLVED -> CLOSED
+    ✓ rejects illegal transitions with structured exception
 
-PASS test/enterprise-webhooks.integration.spec.ts
-  Phase 8: Enterprise Outbound Webhooks Integration (HMAC-SHA256, Jitter, Circuit Breaker & DLQ)
-    ✓ provisions WebhookEndpoint with AES-256-GCM secret encryption at rest
-    ✓ cryptographically signs outbound HTTP request with X-Chronos-Signature & Idempotency Delivery ID
-    ✓ trips sliding-window circuit breaker after 10 consecutive failures and fast-fails without HTTP calls
-    ✓ allows probe request in HALF_OPEN after cooldown expires and resets circuit on 2xx
-    ✓ dead-letters permanently failed deliveries and supports single & bulk replay APIs
-
-PASS test/analytics-cqrs.integration.spec.ts
-  [CQRS LATENCY] Cold start cache rebuild duration: 45ms
-  [CQRS LATENCY] Pre-aggregated Redis dashboard read duration: 0ms
-
-PASS test/sla-orchestration.integration.spec.ts
-  ✓ orchestrates ticket creation -> BullMQ delayed scheduling -> Pause on HOLD -> Resume -> Clear on RESOLVED
-
-PASS test/business-calendar-sla.integration.spec.ts
-  Phase 5: Timezone-Aware Business Calendar SLA Integration
-    ✓ correctly calculates business deadlines and dynamically pauses/resumes SLA on calendar boundaries
-
+PASS test/war-room-telemetry.integration.spec.ts
 PASS test/transactional-outbox.integration.spec.ts
-  Phase 6: Transactional Outbox Pattern Integration (Zero-Loss Event Publishing)
-    ✓ guarantees atomic dual-write: writes Ticket, AuditLog, and OutboxEvent in one transaction
-    ✓ enforces idempotency: duplicate relay sweeps never create duplicate BullMQ jobs
-    ✓ relays state machine transitions: freezes SLA on ON_HOLD and resumes on IN_PROGRESS
+PASS test/analytics-cqrs.integration.spec.ts
+PASS test/sla-orchestration.integration.spec.ts
+PASS test/enterprise-webhooks.integration.spec.ts
+PASS test/atomic-ticket-claim.integration.spec.ts
+PASS test/skill-based-routing.integration.spec.ts
+PASS test/frontend-telemetry-sync.integration.spec.ts
 
-Test Suites: 7 passed, 7 total
-Tests:       20 passed, 20 total
+Test Suites: 11 passed, 11 total
+Tests:       56 passed, 56 total
 Snapshots:   0 total
-Time:        7.542 s
+Time:        10.203 s
 ```
 
 ---
@@ -441,7 +460,7 @@ All requests to tenant-scoped endpoints require either:
 - Header: `x-tenant-id: <uuid>`
 - Or `Authorization: Bearer <jwt-token>` with `tenantId` claim.
 
-### 1. Enterprise Webhooks & DLQ (`/webhooks`)
+### 1. Enterprise Webhooks, Circuit Breakers & DLQ (`/webhooks`)
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/webhooks/endpoints` | **Registers endpoint with AES-256-GCM secret encryption** |
@@ -449,29 +468,24 @@ All requests to tenant-scoped endpoints require either:
 | `GET` | `/webhooks/endpoints/:id` | Returns single endpoint with circuit metrics |
 | `PATCH` | `/webhooks/endpoints/:id` | Updates URL, subscribed events, or active status |
 | `DELETE` | `/webhooks/endpoints/:id` | Removes endpoint and flushes circuit breaker state |
+| `GET` | `/webhooks/deliveries` | **Audit log of outbound HTTP delivery attempts with latency** |
 | `GET` | `/webhooks/dlq` | **Lists Dead Letter Queue delivery failures** |
 | `POST` | `/webhooks/dlq/:deliveryId/replay` | **Manually re-drives a single failed delivery** |
 | `POST` | `/webhooks/endpoints/:id/replay-all` | **Bulk re-drives all DLQ deliveries for an endpoint** |
 | `POST` | `/webhooks/endpoints/:id/circuit/reset`| Admin override to reset circuit breaker to `CLOSED` |
+| `POST` | `/webhooks/endpoints/:id/circuit/trip` | **Chaos test: Trips circuit breaker to `OPEN` for 60s** |
+| `POST` | `/webhooks/endpoints/:id/circuit/simulate-failures` | **Chaos test: Injects 10 rapid 500 errors to trip circuit** |
 
-#### Example: Register Outbound Webhook Endpoint
-```bash
-curl -X POST http://localhost:3000/webhooks/endpoints \
-  -H "Content-Type: application/json" \
-  -H "x-tenant-id: a03a3200-b6ed-4314-b1d5-a24099a62f9a" \
-  -d '{
-    "url": "https://hooks.slack.com/services/T00/B00/XXXXX",
-    "subscribedEvents": ["sla.warning", "sla.breach", "ticket.escalated"]
-  }'
-```
+### 2. SLA Policies & Deadline Calculator (`/sla/policies`)
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/sla/policies` | Creates an SLA policy (P1–P4) |
+| `GET` | `/sla/policies` | Lists active SLA policies |
+| `GET` | `/sla/policies/:id` | Returns policy by ID |
+| `PATCH` | `/sla/policies/:id` | Updates response/resolution minutes |
+| `POST` | `/sla/policies/calculate-deadline` | **Calculates exact Warning & Breach deadlines across working hours & holidays** |
 
-#### Example: Bulk Replay DLQ Deliveries for Recovered Endpoint
-```bash
-curl -X POST http://localhost:3000/webhooks/endpoints/11111111-1111-1111-1111-111111111111/replay-all \
-  -H "x-tenant-id: a03a3200-b6ed-4314-b1d5-a24099a62f9a"
-```
-
-### 2. Skill-Based Routing & Agent Capacity (`/routing`)
+### 3. Skill-Based Routing & Agent Capacity (`/routing`)
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/routing/agents/:id/skills` | Registers skills, proficiency (1..5), max capacity & syncs Redis ZSETs |
@@ -479,7 +493,7 @@ curl -X POST http://localhost:3000/webhooks/endpoints/11111111-1111-1111-1111-11
 | `POST` | `/routing/auto-route` | Executes atomic Redis Lua claim or places ticket in overflow pool |
 | `POST` | `/routing/match` | Workload-based route matcher (FIFO pull queue) |
 
-### 3. Tenants & Business Calendars (`/tenants`)
+### 4. Tenants & Business Calendars (`/tenants`)
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/tenants` | Onboards a new tenant |
@@ -491,40 +505,24 @@ curl -X POST http://localhost:3000/webhooks/endpoints/11111111-1111-1111-1111-11
 | `PUT` | `/tenants/:id/calendar` | Configures timezone, weekly schedule, or 24x7 mode |
 | `GET` | `/tenants/:id/holidays` | Lists configured holidays for tenant |
 | `POST` | `/tenants/:id/holidays` | Adds full or partial-day holiday exclusion |
-| `DELETE` | `/tenants/:id/holidays/:holidayId` | Removes holiday exclusion |
 
-### 4. Tickets (`/tickets`)
+### 5. Tickets & Chaos Simulation (`/tickets`)
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/tickets` | Atomically writes Ticket, AuditLog & OutboxEvent in single transaction |
 | `POST` | `/tickets/claim-next` | Atomic non-blocking claim using `FOR UPDATE SKIP LOCKED` |
 | `POST` | `/tickets/:id/claim` | Claims specific ticket by UUID |
 | `POST` | `/tickets/:id/transition` | State Machine transition (`ASSIGNED`, `IN_PROGRESS`, `ON_HOLD`, `RESOLVED`, `CLOSED`) |
+| `POST` | `/tickets/simulate/burst` | **Chaos test: Dispatches N tickets across random priorities & skills** |
 | `GET` | `/tickets` | Filtered list with composite index execution |
 | `GET` | `/tickets/:id` | Returns single ticket with audit trail |
 | `GET` | `/tickets/:id/audit-logs` | Immutable audit log history |
 
-### 5. Analytics & CQRS Dashboard (`/analytics`)
+### 6. Analytics & CQRS Dashboard (`/analytics`)
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/analytics/dashboard` | Sub-5ms Pre-aggregated Redis live metrics (fallback on miss) |
 | `GET` | `/analytics/overview` | Tenant ticket counts and workload distribution |
-
-### 6. Real-Time WebSockets (`ws://localhost:3000/events`)
-Connect via Socket.io with tenant handshake:
-```javascript
-import { io } from 'socket.io-client';
-
-const socket = io('http://localhost:3000/events', {
-  extraHeaders: {
-    'x-tenant-id': 'a03a3200-b6ed-4314-b1d5-a24099a62f9a',
-  },
-});
-
-socket.on('ticket.claimed', (data) => console.log('Ticket Claimed:', data));
-socket.on('sla.warning', (data) => console.log('80% SLA Warning:', data));
-socket.on('sla.breached', (data) => console.log('SLA Breached & Escalated:', data));
-```
 
 ### 7. Real-Time War-Room Gateway (`ws://localhost:3000/war-room`)
 Horizontally scalable, multi-replica telemetry stream authenticated via JWT:
