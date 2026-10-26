@@ -1,0 +1,81 @@
+{
+  "name": "chronos",
+  "version": "1.0.0",
+  "description": "Chronos - Production-Grade Multi-Tenant Event-Driven Routing and SLA Orchestration Engine",
+  "author": "Chronos Core Team",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "nest build",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "start:debug": "nest start --debug --watch",
+    "start:prod": "node dist/main",
+    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "test": "jest",
+    "test:integration": "jest --config ./test/jest-integration.json",
+    "test:watch": "jest --watch",
+    "test:cov": "jest --coverage",
+    "test:e2e": "jest --config ./test/jest-e2e.json"
+  },
+  "jest": {
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
+    "rootDir": "src",
+    "testRegex": ".*\\.spec\\.ts$",
+    "transform": {
+      "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
+    "coverageDirectory": "../coverage",
+    "testEnvironment": "node"
+  },
+  "dependencies": {
+    "@nestjs/bullmq": "^11.0.4",
+    "@nestjs/common": "^11.0.11",
+    "@nestjs/config": "^4.0.2",
+    "@nestjs/core": "^11.0.11",
+    "@nestjs/event-emitter": "^3.0.0",
+    "@nestjs/platform-express": "^11.0.11",
+    "@nestjs/platform-socket.io": "^11.0.0",
+    "@nestjs/websockets": "^11.0.0",
+    "@prisma/client": "^6.4.1",
+    "bullmq": "^5.41.6",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "ioredis": "^5.6.0",
+    "jsonwebtoken": "^9.0.2",
+    "nestjs-cls": "^6.0.4",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "socket.io": "^4.8.1",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.5",
+    "@nestjs/schematics": "^11.0.2",
+    "@nestjs/testing": "^11.0.11",
+    "@types/express": "^5.0.0",
+    "@types/jest": "^29.5.14",
+    "@types/jsonwebtoken": "^9.0.9",
+    "@types/node": "^22.13.10",
+    "@types/supertest": "^6.0.2",
+    "@types/uuid": "^10.0.0",
+    "prisma": "^6.4.1",
+    "source-map-support": "^0.5.21",
+    "ts-jest": "^29.2.6",
+    "ts-loader": "^9.5.2",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.8.2"
+  }
+}

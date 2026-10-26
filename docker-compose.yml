@@ -1,0 +1,60 @@
+name: chronos
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: chronos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chronos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chronos_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-chronos_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - chronos_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chronos} -d ${POSTGRES_DB:-chronos_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - chronos-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: chronos-redis
+    restart: unless-stopped
+    command: >
+      sh -c '
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes
+        else
+          redis-server --appendonly yes
+        fi
+      '
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - chronos_redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-redis_secret} ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - chronos-network
+
+volumes:
+  chronos_pgdata:
+    driver: local
+  chronos_redisdata:
+    driver: local
+
+networks:
+  chronos-network:
+    driver: bridge
