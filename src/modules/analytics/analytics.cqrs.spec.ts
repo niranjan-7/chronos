@@ -152,6 +152,7 @@ describe('Analytics & CQRS Module (Phase 4 Unit Tests)', () => {
     beforeEach(() => {
       mockPrisma = {
         webhookDeliveryLog: {
+          findUnique: jest.fn().mockResolvedValue({ id: 'del-1' }),
           update: jest.fn().mockResolvedValue({}),
         },
       };

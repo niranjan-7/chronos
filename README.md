@@ -1,13 +1,13 @@
 # Chronos ⏱️
 
 > **Production-Grade, Multi-Tenant, Event-Driven Routing and SLA Orchestration Engine**  
-> Built with NestJS (TypeScript, Strict Mode), PostgreSQL 16, Prisma ORM, Redis (BullMQ), Socket.io, and Docker.
+> Built with NestJS (TypeScript, Strict Mode), PostgreSQL 16, Prisma ORM, Redis (BullMQ), Socket.io, Luxon, and Docker.
 
 ---
 
 ## 🏗️ System Architecture Overview
 
-Chronos is an enterprise-grade ticket routing and SLA orchestration engine designed for high-concurrency, multi-tenant operations with zero cross-tenant data leakage, sub-millisecond CQRS read analytics, non-blocking ticket claiming, and automated SLA breach escalations.
+Chronos is an enterprise-grade ticket routing and SLA orchestration engine designed for high-concurrency, multi-tenant operations with zero cross-tenant data leakage, sub-millisecond CQRS read analytics, non-blocking ticket claiming, timezone-aware business calendar SLA tracking, and automated SLA breach escalations.
 
 ```
                               ┌───────────────────────────────────┐
@@ -34,10 +34,13 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
                    ▼ (Domain Events)                                       ▼
         ┌──────────────────────┐                                ┌──────────────────────┐
         │      SlaModule       │                                │  Outbound Webhooks   │
-        │ • 80% Warning Job    │                                │ • HMAC-SHA256 Sign   │
-        │ • 100% Breach Bump   │                                │ • Exp. Backoff (5x)  │
-        │ • Pause / Resume     │                                │ • Dead Letter Queue  │
-        └──────────┬───────────┘                                └──────────────────────┘
+        │ • Timezone Luxon Calc│                                │ • HMAC-SHA256 Sign   │
+        │ • Business Hours Calc│                                │ • Exp. Backoff (5x)  │
+        │ • Holiday Exclusion  │                                │ • Dead Letter Queue  │
+        │ • 80% Warning Job    │                                └──────────────────────┘
+        │ • 100% Breach Bump   │
+        │ • Freeze / Unfreeze  │
+        └──────────┬───────────┘
                    │
                    ├───────────────────────────────────┐
                    ▼                                   ▼
@@ -46,7 +49,9 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
         │ • Multi-Tenant DB    │            │ • BullMQ Queues      │
         │ • B-Tree Indexes     │            │ • Pre-Aggregated HSET│
         │ • Row-Level Locks    │            │ • Deterministic IDs  │
-        └──────────────────────┘            └──────────────────────┘
+        │ • Business Calendars │            └──────────────────────┘
+        │ • Tenant Holidays    │
+        └──────────────────────┘
 ```
 
 ---
@@ -64,7 +69,7 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
   - Each transaction acquires exactly one unassigned ticket.
   - Concurrent transactions encountering locked rows **skip them immediately** without queuing or blocking database connection pools.
   - Zero deadlocks, zero lock-wait timeouts, and zero race conditions.
-  - Benchmarked under load: **20 concurrent claims resolved in 19–26ms**.
+  - Benchmarked under load: **20 concurrent claims resolved in 22–27ms**.
 
 ### 3. Strict Ticket Lifecycle State Machine
 - Enforces an immutable Directed Acyclic Graph (DAG) of allowed lifecycle transitions:
@@ -72,28 +77,27 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
 - Illegal state transitions throw a structured HTTP 400 [`InvalidStateTransitionException`](src/modules/tickets/exceptions/invalid-state-transition.exception.ts).
 - Every state transition or agent assignment writes an immutable transactional record to `TicketAuditLogs` within the same ACID transaction.
 
-### 4. Event-Driven SLA Orchestration (Redis & BullMQ)
-- **Decoupled Architecture**: In-process domain events (`@nestjs/event-emitter`) publish notifications; distributed Redis BullMQ queues handle delayed executions.
-- **Pre-Configured Policy Tiers**:
-  - `P1 (URGENT)`: 15m Response / 60m Resolution SLA
-  - `P2 (HIGH)`: 30m Response / 4h Resolution SLA
-  - `P3 (MEDIUM)`: 60m Response / 8h Resolution SLA
-  - `P4 (LOW)`: 120m Response / 24h Resolution SLA
+### 4. Timezone-Aware Business Hours & Holiday SLA Orchestration (v2.0)
+- **Tenant-Specific Business Calendars**: Supports arbitrary IANA timezones (e.g., `America/New_York`, `Europe/London`, `Asia/Kolkata`), custom weekly active shifts (e.g., Mon–Fri 09:00–17:00), and full or partial-day holiday exclusions (`TenantHolidays`).
+- **Deterministic Wall-Clock Calculator (`SlaCalendarCalculatorService`)**:
+  - Pure Luxon-based calendar algorithm calculates exact wall-clock UTC timestamps for 80% (Warning) and 100% (Breach) deadlines counting **only active business milliseconds**.
+  - *Example*: A 4-hour (14,400,000ms) SLA arriving Friday at 15:00 local time (business hours 09:00–17:00, closed weekends) consumes 2 hours on Friday, automatically freezes over the weekend, and resumes Monday at 09:00, scheduling the BullMQ breach job for Monday at 11:00 local time.
+  - Transparently handles Daylight Saving Time (DST) Fall-Back and Spring-Forward transitions without offset drift.
+- **Dynamic SLA Freeze & Resume**:
+  - When a ticket transitions to `ON_HOLD`, the system computes `elapsed_business_ms` since active resumption, subtracts it from `remaining_sla_ms`, stores `sla_paused_at` and `remaining_sla_ms` in PostgreSQL, and atomically removes active BullMQ delayed jobs (`sla-warn-...`, `sla-breach-...`) from Redis.
+  - When returning from `ON_HOLD` to `IN_PROGRESS`, `SlaCalendarCalculatorService` recalculates fresh wall-clock deadlines using the remaining business duration, and re-enqueues fresh BullMQ delayed jobs.
+  - When transitioning to `RESOLVED` or `CLOSED`, pending SLA jobs are automatically purged.
 - **Deterministic Job IDs for $O(1)$ Cancellation**:
-  - `sla-warn-${tenantId}-${ticketId}` (at 80% of duration)
-  - `sla-breach-${tenantId}-${ticketId}` (at 100% of duration)
-- **SLA Pause & Resume**:
-  - When ticket moves to `ON_HOLD`, pending Redis delayed jobs are cancelled, and `remaining_sla_ms` is persisted on the database row.
-  - When ticket resumes to `IN_PROGRESS`, BullMQ delayed jobs are re-enqueued using the exact `remaining_sla_ms`.
-  - When ticket moves to `RESOLVED`, pending SLA jobs are automatically removed.
+  - `sla-warn-${tenantId}-${ticketId}` (at 80% of business duration)
+  - `sla-breach-${tenantId}-${ticketId}` (at 100% of business duration)
 - **SLA Worker Processor**:
-  - Re-hydrates the `AsyncLocalStorage` store with the job's `tenantId` before performing database queries.
-  - Automatically triggers priority escalation bumps upon breach (`LOW` $\to$ `MEDIUM` $\to$ `HIGH` $\to$ `URGENT`).
+  - Re-hydrates `AsyncLocalStorage` with `tenantId` before database mutations.
+  - Escalates priority upon breach (`LOW` $\to$ `MEDIUM` $\to$ `HIGH` $\to$ `URGENT`) and dispatches outbound alerts.
 
 ### 5. CQRS Read Layer & Pre-Aggregated Redis Caching
 - Asynchronous CQRS projections maintain live tenant metric hashes: `tenant:${tenantId}:metrics:live`.
 - Atomic `HINCRBY` pipelined operations track `open_count`, `on_hold_count`, `breached_count`, `at_risk_count`, and priority counts.
-- `GET /analytics/dashboard` reads directly from Redis: **1ms response latency** (<50ms SLA).
+- `GET /analytics/dashboard` reads directly from Redis: **<1ms response latency** (<50ms SLA).
 - Automatic cache-rebuild fallback service re-aggregates from PostgreSQL on cache misses.
 
 ### 6. Real-Time WebSockets & Outbound Webhooks
@@ -121,6 +125,27 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
 └──────────────┬─────────────────┘       └────────────────────────────────┘
                │
                │ 1                       ┌────────────────────────────────┐
+               ├────────────────────────<│       business_calendars       │
+               │ 1                       ├────────────────────────────────┤
+               │                         │ id: uuid (PK)                  │
+               │                         │ tenant_id: uuid (FK, UQ)       │
+               │                         │ timezone: varchar(64)          │
+               │                         │ weekly_schedule: jsonb         │
+               │                         │ is_24x7: boolean               │
+               │                         │ INDEX (tenant_id)              │
+               │                         └────────────────────────────────┘
+               │ 1                       ┌────────────────────────────────┐
+               ├────────────────────────<│        tenant_holidays         │
+               │ *                       ├────────────────────────────────┤
+               │                         │ id: uuid (PK)                  │
+               │                         │ tenant_id: uuid (FK)           │
+               │                         │ name: varchar(255)             │
+               │                         │ date: varchar(10) (YYYY-MM-DD) │
+               │                         │ is_full_day: boolean           │
+               │                         │ start_time / end_time: varchar │
+               │                         │ INDEX (tenant_id, date)        │
+               │                         └────────────────────────────────┘
+               │ 1                       ┌────────────────────────────────┐
                ├────────────────────────<│          sla_policies          │
                │ *                       ├────────────────────────────────┤
                │                         │ id: uuid (PK)                  │
@@ -144,6 +169,8 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
                │                         │ is_warning_sent: boolean       │
                │                         │ remaining_sla_ms: bigint       │
                │                         │ resolution_due_at: timestamptz │
+               │                         │ sla_paused_at: timestamptz     │
+               │                         │ last_resumed_at: timestamptz   │
                │                         │ INDEX (tenant_id, status, prio)│
                │                         └──────────────┬─────────────────┘
                │                                        │
@@ -235,33 +262,35 @@ Server starts at: `http://localhost:3000`
 Chronos includes comprehensive unit test suites and real-world concurrency integration tests:
 
 ```bash
-# Run all unit tests (41 tests passing)
+# Run all unit tests (49 tests passing across 6 suites)
 npm test
 
-# Run high-concurrency integration tests with live PostgreSQL & Redis
+# Run high-concurrency and SLA lifecycle integration tests with live PostgreSQL & Redis
 npm run test:integration
 ```
 
-### Concurrency Benchmark Output
+### Integration Test Results
 ```
 PASS test/atomic-ticket-claim.integration.spec.ts
   Atomic Ticket Claim Engine (SKIP LOCKED Concurrency Proof)
-    ✓ proves that 20 concurrent agents claiming 10 tickets yields zero collisions, exactly 10 successes and 10 graceful skips (22ms)
-    ✓ proves that 10 concurrent agents racing for the EXACT SAME ticket results in 1 winner and 9 rejected without race conditions (11ms)
-
-  [CONCURRENCY PROOF] 20 concurrent claims completed in 22ms
+    ✓ proves that 20 concurrent agents claiming 10 tickets yields zero collisions, exactly 10 successes and 10 graceful skips (25ms)
+    ✓ proves that 10 concurrent agents racing for the EXACT SAME ticket results in 1 winner and 9 rejected without race conditions (12ms)
 
 PASS test/analytics-cqrs.integration.spec.ts
-  [CQRS LATENCY] Cold start cache rebuild duration: 49ms
-  [CQRS LATENCY] Pre-aggregated Redis dashboard read duration: 1ms
+  [CQRS LATENCY] Cold start cache rebuild duration: 50ms
+  [CQRS LATENCY] Pre-aggregated Redis dashboard read duration: 0ms
 
 PASS test/sla-orchestration.integration.spec.ts
   ✓ orchestrates ticket creation -> BullMQ delayed scheduling -> Pause on HOLD -> Resume -> Clear on RESOLVED
 
-Test Suites: 3 passed, 3 total
-Tests:       6 passed, 6 total
+PASS test/business-calendar-sla.integration.spec.ts
+  Phase 5: Timezone-Aware Business Calendar SLA Integration
+    ✓ correctly calculates business deadlines and dynamically pauses/resumes SLA on calendar boundaries
+
+Test Suites: 4 passed, 4 total
+Tests:       7 passed, 7 total
 Snapshots:   0 total
-Time:        3.021 s
+Time:        4.032 s
 ```
 
 ---
@@ -272,19 +301,56 @@ All requests to tenant-scoped endpoints require either:
 - Header: `x-tenant-id: <uuid>`
 - Or `Authorization: Bearer <jwt-token>` with `tenantId` claim.
 
-### 1. Tenants (`/tenants`)
-| Method | Endpoint | Description | Public |
-|---|---|---|---|
-| `POST` | `/tenants` | Onboards a new tenant | Yes |
-| `GET` | `/tenants` | Lists all tenants | Yes |
-| `GET` | `/tenants/me` | Returns calling tenant profile | No |
-| `GET` | `/tenants/:id` | Returns tenant by ID | Yes |
-| `PATCH` | `/tenants/:id` | Updates tenant configuration | Yes |
+### 1. Tenants & Business Calendars (`/tenants`)
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/tenants` | Onboards a new tenant |
+| `GET` | `/tenants` | Lists all tenants |
+| `GET` | `/tenants/me` | Returns calling tenant profile |
+| `GET` | `/tenants/:id` | Returns tenant by ID |
+| `PATCH` | `/tenants/:id` | Updates tenant configuration |
+| `GET` | `/tenants/:id/calendar` | **Retrieves business calendar & weekly schedule** |
+| `PUT` | `/tenants/:id/calendar` | **Configures timezone, weekly schedule, or 24x7 mode** |
+| `GET` | `/tenants/:id/holidays` | **Lists configured holidays for tenant** |
+| `POST` | `/tenants/:id/holidays` | **Adds full or partial-day holiday exclusion** |
+| `DELETE` | `/tenants/:id/holidays/:holidayId` | **Removes holiday exclusion** |
+
+#### Example: Configure Business Hours (Mon–Fri 09:00–17:00 America/New_York)
+```bash
+curl -X PUT http://localhost:3000/tenants/a03a3200-b6ed-4314-b1d5-a24099a62f9a/calendar \
+  -H "Content-Type: application/json" \
+  -H "x-tenant-id: a03a3200-b6ed-4314-b1d5-a24099a62f9a" \
+  -d '{
+    "timezone": "America/New_York",
+    "is24x7": false,
+    "weeklySchedule": {
+      "monday": [{ "start": "09:00", "end": "17:00" }],
+      "tuesday": [{ "start": "09:00", "end": "17:00" }],
+      "wednesday": [{ "start": "09:00", "end": "17:00" }],
+      "thursday": [{ "start": "09:00", "end": "17:00" }],
+      "friday": [{ "start": "09:00", "end": "17:00" }],
+      "saturday": [],
+      "sunday": []
+    }
+  }'
+```
+
+#### Example: Add Holiday Exclusion
+```bash
+curl -X POST http://localhost:3000/tenants/a03a3200-b6ed-4314-b1d5-a24099a62f9a/holidays \
+  -H "Content-Type: application/json" \
+  -H "x-tenant-id: a03a3200-b6ed-4314-b1d5-a24099a62f9a" \
+  -d '{
+    "name": "Thanksgiving Day",
+    "date": "2026-11-26",
+    "isFullDay": true
+  }'
+```
 
 ### 2. Tickets (`/tickets`)
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/tickets` | Creates a new tenant ticket; triggers SLA scheduling |
+| `POST` | `/tickets` | Creates a new tenant ticket; triggers timezone-aware SLA scheduling |
 | `POST` | `/tickets/claim-next` | **Atomic non-blocking claim** using `FOR UPDATE SKIP LOCKED` |
 | `POST` | `/tickets/:id/claim` | Claims specific ticket by UUID |
 | `POST` | `/tickets/:id/transition` | State Machine transition (`ASSIGNED`, `IN_PROGRESS`, `ON_HOLD`, `RESOLVED`, `CLOSED`) |

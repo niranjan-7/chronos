@@ -12,6 +12,8 @@ import {
 import { PrismaService } from '../../../common/database/prisma.service';
 import { SlaPolicyService } from '../services/sla-policy.service';
 import { SlaQueueService } from '../services/sla-queue.service';
+import { SlaCalendarCalculatorService } from '../services/sla-calendar-calculator.service';
+import { TenantCalendarService } from '../../tenants/services/tenant-calendar.service';
 
 @Injectable()
 export class SlaEventListener {
@@ -21,14 +23,17 @@ export class SlaEventListener {
     private readonly prisma: PrismaService,
     private readonly slaPolicyService: SlaPolicyService,
     private readonly slaQueueService: SlaQueueService,
+    private readonly calendarCalculator: SlaCalendarCalculatorService,
+    private readonly tenantCalendarService: TenantCalendarService,
   ) {}
 
   /**
-   * Listens for ticket creation, resolves policy, and enqueues delayed SLA jobs in BullMQ.
+   * Listens for ticket creation, resolves policy & tenant business calendar,
+   * calculates timezone-aware business deadlines, and enqueues delayed jobs in BullMQ.
    */
   @OnEvent(TICKET_CREATED_EVENT)
   async handleTicketCreated(event: TicketCreatedEvent): Promise<void> {
-    const { tenantId, ticketId, priority, slaPolicyId } = event;
+    const { tenantId, ticketId, priority, slaPolicyId, createdAt } = event;
 
     // 1. Resolve matching SLA policy
     const policy = await this.slaPolicyService.resolvePolicyForTicket(
@@ -43,29 +48,42 @@ export class SlaEventListener {
     }
 
     const durationMs = policy.resolutionTimeMinutes * 60 * 1000;
-    const now = Date.now();
-    const resolutionDueAt = new Date(now + durationMs);
 
-    // 2. Schedule BullMQ delayed warning (80%) and breach (100%) jobs
-    await this.slaQueueService.scheduleSlaJobs({
+    // 2. Fetch tenant business calendar and holiday schedule
+    const { calendar, holidays } = await this.tenantCalendarService.getTenantCalendarContext(tenantId);
+
+    // 3. Compute business-hours-aware warning and breach deadlines
+    const deadlines = this.calendarCalculator.calculateDeadlines(
+      createdAt,
+      durationMs,
+      calendar,
+      holidays,
+    );
+
+    // 4. Enqueue BullMQ delayed jobs with calculated wall-clock delays
+    await this.slaQueueService.scheduleJobsWithDelays({
       tenantId,
       ticketId,
       policyVersion: policy.version,
-      targetDurationMs: durationMs,
+      warningDelayMs: deadlines.warningDelayMs,
+      breachDelayMs: deadlines.breachDelayMs,
+      breachDateISO: deadlines.breachDate.toISOString(),
     });
 
-    // 3. Persist deadline & remaining SLA state to database
+    // 5. Persist SLA state and initial lastResumedAt to database
     await this.prisma.ticket.update({
       where: { id: ticketId },
       data: {
         slaPolicyId: policy.id,
         policyVersion: policy.version,
-        resolutionDueAt,
+        resolutionDueAt: deadlines.breachDate,
         remainingSlaMs: BigInt(durationMs),
+        lastResumedAt: createdAt,
+        slaPausedAt: null,
       },
     });
 
-    // 4. Record audit log
+    // 6. Record audit log with calendar context
     await this.prisma.ticketAuditLog.create({
       data: {
         tenantId,
@@ -74,17 +92,22 @@ export class SlaEventListener {
         changes: {
           policyName: policy.name,
           resolutionTimeMinutes: policy.resolutionTimeMinutes,
-          resolutionDueAt: resolutionDueAt.toISOString(),
-          warningThresholdMs: Math.round(durationMs * 0.8),
+          timezone: calendar.timezone,
+          warningDeadline: deadlines.warningDate.toISOString(),
+          breachDeadline: deadlines.breachDate.toISOString(),
+          warningDelayMs: deadlines.warningDelayMs,
+          breachDelayMs: deadlines.breachDelayMs,
         },
       },
     });
 
-    this.logger.log(`Initialized SLA monitoring for ticket ${ticketId}: ${policy.name}`);
+    this.logger.log(
+      `Scheduled timezone-aware SLA for ticket ${ticketId}: Breach at ${deadlines.breachDate.toISOString()} (${calendar.timezone})`,
+    );
   }
 
   /**
-   * Listens for status transitions and handles Pause (ON_HOLD), Resume (IN_PROGRESS), and Resolution.
+   * Listens for status transitions and dynamically freezes/unfreezes SLA based on elapsed business hours.
    */
   @OnEvent(TICKET_TRANSITIONED_EVENT)
   async handleTicketTransitioned(event: TicketTransitionedEvent): Promise<void> {
@@ -97,21 +120,33 @@ export class SlaEventListener {
 
     if (!ticket) return;
 
-    // 1. Pause SLA when ticket goes ON_HOLD
+    // 1. Freeze SLA when ticket moves to ON_HOLD
     if (newStatus === TicketStatus.ON_HOLD && previousStatus !== TicketStatus.ON_HOLD) {
-      const now = Date.now();
-      const dueTime = ticket.resolutionDueAt?.getTime() ?? now;
-      const remainingSlaMs = Math.max(0, dueTime - now);
+      const now = new Date();
+      const activeSince = ticket.lastResumedAt || ticket.createdAt || now;
 
-      // Cancel delayed jobs in Redis
+      // Resolve calendar and calculate exact elapsed business ms
+      const { calendar, holidays } = await this.tenantCalendarService.getTenantCalendarContext(tenantId);
+      const elapsedBusinessMs = this.calendarCalculator.calculateElapsedBusinessMs(
+        activeSince,
+        now,
+        calendar,
+        holidays,
+      );
+
+      const currentRemaining = ticket.remainingSlaMs ? Number(ticket.remainingSlaMs) : 0;
+      const newRemainingSlaMs = Math.max(0, currentRemaining - elapsedBusinessMs);
+
+      // Cancel pending BullMQ delayed jobs from Redis
       await this.slaQueueService.cancelSlaJobs(tenantId, ticketId);
 
-      // Persist pausedAt and remaining duration
+      // Persist exact remaining business milliseconds and pause timestamps
       await this.prisma.ticket.update({
         where: { id: ticketId },
         data: {
-          pausedAt: new Date(now),
-          remainingSlaMs: BigInt(remainingSlaMs),
+          slaPausedAt: now,
+          pausedAt: now,
+          remainingSlaMs: BigInt(newRemainingSlaMs),
         },
       });
 
@@ -122,30 +157,46 @@ export class SlaEventListener {
           actorId,
           action: 'SLA_PAUSED',
           changes: {
-            remainingSlaMs,
-            pausedAt: new Date(now).toISOString(),
+            elapsedBusinessMs,
+            previousRemainingMs: currentRemaining,
+            newRemainingSlaMs,
+            slaPausedAt: now.toISOString(),
           },
         },
       });
 
-      this.logger.log(`SLA Paused for ticket ${ticketId}: ${remainingSlaMs}ms remaining`);
+      this.logger.log(
+        `SLA Paused for ticket ${ticketId}: ${elapsedBusinessMs}ms business elapsed, ${newRemainingSlaMs}ms remaining`,
+      );
       return;
     }
 
-    // 2. Resume SLA when transitioning back to IN_PROGRESS
+    // 2. Unfreeze SLA when transitioning from ON_HOLD back to IN_PROGRESS
     if (previousStatus === TicketStatus.ON_HOLD && newStatus === TicketStatus.IN_PROGRESS) {
+      const now = new Date();
       const remainingMs = ticket.remainingSlaMs ? Number(ticket.remainingSlaMs) : 0;
-      const now = Date.now();
-      const newResolutionDueAt = new Date(now + remainingMs);
 
-      // Re-enqueue BullMQ delayed jobs with exact remaining duration
+      const { calendar, holidays } = await this.tenantCalendarService.getTenantCalendarContext(tenantId);
+
+      // Compute fresh wall-clock deadlines counting only future business hours
+      let newBreachDate = now;
       if (remainingMs > 0 && !ticket.isBreached) {
-        await this.slaQueueService.scheduleSlaJobs({
+        const deadlines = this.calendarCalculator.calculateDeadlines(
+          now,
+          remainingMs,
+          calendar,
+          holidays,
+        );
+
+        newBreachDate = deadlines.breachDate;
+
+        await this.slaQueueService.scheduleJobsWithDelays({
           tenantId,
           ticketId,
           policyVersion: ticket.policyVersion,
-          targetDurationMs: ticket.slaPolicy?.resolutionTimeMinutes ? ticket.slaPolicy.resolutionTimeMinutes * 60 * 1000 : remainingMs,
-          remainingMs,
+          warningDelayMs: deadlines.warningDelayMs,
+          breachDelayMs: deadlines.breachDelayMs,
+          breachDateISO: deadlines.breachDate.toISOString(),
           warningAlreadySent: ticket.isWarningSent,
         });
       }
@@ -153,8 +204,10 @@ export class SlaEventListener {
       await this.prisma.ticket.update({
         where: { id: ticketId },
         data: {
+          slaPausedAt: null,
           pausedAt: null,
-          resolutionDueAt: newResolutionDueAt,
+          lastResumedAt: now,
+          resolutionDueAt: newBreachDate,
         },
       });
 
@@ -165,14 +218,16 @@ export class SlaEventListener {
           actorId,
           action: 'SLA_RESUMED',
           changes: {
-            resumedAt: new Date(now).toISOString(),
-            newResolutionDueAt: newResolutionDueAt.toISOString(),
+            resumedAt: now.toISOString(),
             remainingSlaMs: remainingMs,
+            newResolutionDueAt: newBreachDate.toISOString(),
           },
         },
       });
 
-      this.logger.log(`SLA Resumed for ticket ${ticketId}: New deadline ${newResolutionDueAt.toISOString()}`);
+      this.logger.log(
+        `SLA Resumed for ticket ${ticketId}: ${remainingMs}ms remaining, New deadline ${newBreachDate.toISOString()}`,
+      );
       return;
     }
 

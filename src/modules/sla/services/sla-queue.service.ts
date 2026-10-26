@@ -20,43 +20,41 @@ export class SlaQueueService {
   ) {}
 
   /**
-   * Enqueues deterministic BullMQ delayed jobs for SLA warning (80%) and breach (100%).
+   * Enqueues deterministic BullMQ delayed jobs with exact wall-clock delays
+   * computed by SlaCalendarCalculatorService.
    */
-  async scheduleSlaJobs(params: {
+  async scheduleJobsWithDelays(params: {
     tenantId: string;
     ticketId: string;
     policyVersion: number;
-    targetDurationMs: number;
-    remainingMs?: number;
+    warningDelayMs: number;
+    breachDelayMs: number;
+    breachDateISO: string;
     warningAlreadySent?: boolean;
   }): Promise<{ warningJobId: string; breachJobId: string }> {
     const {
       tenantId,
       ticketId,
       policyVersion,
-      targetDurationMs,
-      remainingMs,
+      warningDelayMs,
+      breachDelayMs,
+      breachDateISO,
       warningAlreadySent,
     } = params;
-
-    const effectiveTotalMs = remainingMs ?? targetDurationMs;
-    const deadline = new Date(Date.now() + effectiveTotalMs).toISOString();
 
     const warningJobId = getSlaWarningJobId(tenantId, ticketId);
     const breachJobId = getSlaBreachJobId(tenantId, ticketId);
 
-    // Cancel any stale/previous instances before scheduling
+    // Cancel existing jobs to prevent stale instances
     await this.cancelSlaJobs(tenantId, ticketId);
 
-    // 1. Calculate Warning delay (80% of total target duration)
-    const warningDelayMs = Math.round(effectiveTotalMs * 0.8);
-
+    // 1. Warning Job (80% mark in business time)
     if (!warningAlreadySent && warningDelayMs > 0) {
       const warningPayload: SlaJobPayload = {
         tenantId,
         ticketId,
         policyVersion,
-        targetDeadline: deadline,
+        targetDeadline: breachDateISO,
         stage: 'WARNING',
       };
 
@@ -68,31 +66,57 @@ export class SlaQueueService {
       });
 
       this.logger.debug(
-        `Scheduled SLA Warning job '${warningJobId}' in ${warningDelayMs}ms (80% mark)`,
+        `Scheduled Business-Time Warning job '${warningJobId}' in ${warningDelayMs}ms (delay)`,
       );
     }
 
-    // 2. Schedule Breach delay (100% of target duration)
+    // 2. Breach Job (100% mark in business time)
     const breachPayload: SlaJobPayload = {
       tenantId,
       ticketId,
       policyVersion,
-      targetDeadline: deadline,
+      targetDeadline: breachDateISO,
       stage: 'BREACH',
     };
 
     await this.slaQueue.add(SLA_JOB_BREACH, breachPayload, {
       jobId: breachJobId,
-      delay: Math.round(effectiveTotalMs),
+      delay: Math.max(0, breachDelayMs),
       removeOnComplete: true,
       removeOnFail: false,
     });
 
     this.logger.debug(
-      `Scheduled SLA Breach job '${breachJobId}' in ${effectiveTotalMs}ms (100% mark)`,
+      `Scheduled Business-Time Breach job '${breachJobId}' in ${breachDelayMs}ms (delay)`,
     );
 
     return { warningJobId, breachJobId };
+  }
+
+  /**
+   * Legacy / Wall-Clock scheduling fallback.
+   */
+  async scheduleSlaJobs(params: {
+    tenantId: string;
+    ticketId: string;
+    policyVersion: number;
+    targetDurationMs: number;
+    remainingMs?: number;
+    warningAlreadySent?: boolean;
+  }): Promise<{ warningJobId: string; breachJobId: string }> {
+    const effectiveTotalMs = params.remainingMs ?? params.targetDurationMs;
+    const warningDelayMs = Math.round(effectiveTotalMs * 0.8);
+    const breachDateISO = new Date(Date.now() + effectiveTotalMs).toISOString();
+
+    return this.scheduleJobsWithDelays({
+      tenantId: params.tenantId,
+      ticketId: params.ticketId,
+      policyVersion: params.policyVersion,
+      warningDelayMs,
+      breachDelayMs: effectiveTotalMs,
+      breachDateISO,
+      warningAlreadySent: params.warningAlreadySent,
+    });
   }
 
   /**
@@ -129,9 +153,6 @@ export class SlaQueueService {
     this.logger.debug(`Cancelled pending SLA jobs for ticket ${ticketId}`);
   }
 
-  /**
-   * Inspects active delayed status in Redis for debugging/verification.
-   */
   async getJobStatus(tenantId: string, ticketId: string) {
     const warningJobId = getSlaWarningJobId(tenantId, ticketId);
     const breachJobId = getSlaBreachJobId(tenantId, ticketId);

@@ -4,6 +4,7 @@ import { ClsService } from 'nestjs-cls';
 import { TicketPriority, TicketStatus } from '@prisma/client';
 import { SlaQueueService } from './services/sla-queue.service';
 import { SlaPolicyService } from './services/sla-policy.service';
+import { SlaCalendarCalculatorService } from './services/sla-calendar-calculator.service';
 import { SlaEventListener } from './listeners/sla-event.listener';
 import { SlaProcessor } from './processors/sla.processor';
 import { PrismaService } from '../../common/database/prisma.service';
@@ -61,7 +62,32 @@ describe('SLA Orchestration Engine (Phase 3)', () => {
 
     queueService = new SlaQueueService(mockQueue);
     const policyService = new SlaPolicyService(mockPrisma);
-    eventListener = new SlaEventListener(mockPrisma, policyService, queueService);
+    const calendarCalculator = new SlaCalendarCalculatorService();
+    const mockTenantCalendar = {
+      getTenantCalendarContext: jest.fn().mockResolvedValue({
+        calendar: {
+          timezone: 'UTC',
+          weeklySchedule: {
+            monday: [{ start: '00:00', end: '23:59' }],
+            tuesday: [{ start: '00:00', end: '23:59' }],
+            wednesday: [{ start: '00:00', end: '23:59' }],
+            thursday: [{ start: '00:00', end: '23:59' }],
+            friday: [{ start: '00:00', end: '23:59' }],
+            saturday: [{ start: '00:00', end: '23:59' }],
+            sunday: [{ start: '00:00', end: '23:59' }],
+          },
+          is24x7: true,
+        },
+        holidays: [],
+      }),
+    } as any;
+    eventListener = new SlaEventListener(
+      mockPrisma,
+      policyService,
+      queueService,
+      calendarCalculator,
+      mockTenantCalendar,
+    );
     const mockEventEmitter = {
       emit: jest.fn(),
     } as any;
@@ -128,11 +154,14 @@ describe('SLA Orchestration Engine (Phase 3)', () => {
   describe('SLA Pause & Resume Lifecycle (SlaEventListener)', () => {
     it('should calculate remaining_sla_ms and cancel BullMQ jobs on transition to ON_HOLD', async () => {
       const futureDue = new Date(Date.now() + 1800000); // 30 min remaining
+      const now = new Date();
       mockPrisma.ticket.findUnique.mockResolvedValue({
         id: mockTicketId,
         tenantId: mockTenantId,
         status: TicketStatus.IN_PROGRESS,
         resolutionDueAt: futureDue,
+        createdAt: now,
+        lastResumedAt: now,
         isBreached: false,
       });
 
@@ -173,7 +202,7 @@ describe('SLA Orchestration Engine (Phase 3)', () => {
         policyVersion: 1,
       });
 
-      const scheduleSpy = jest.spyOn(queueService, 'scheduleSlaJobs').mockResolvedValue({
+      const scheduleSpy = jest.spyOn(queueService, 'scheduleJobsWithDelays').mockResolvedValue({
         warningJobId: 'w-1',
         breachJobId: 'b-1',
       });
@@ -191,7 +220,6 @@ describe('SLA Orchestration Engine (Phase 3)', () => {
         expect.objectContaining({
           tenantId: mockTenantId,
           ticketId: mockTicketId,
-          remainingMs: 1800000,
         }),
       );
       expect(mockPrisma.ticket.update).toHaveBeenCalledWith({

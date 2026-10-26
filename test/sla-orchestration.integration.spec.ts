@@ -7,6 +7,8 @@ import { PrismaService } from '../src/common/database/prisma.service';
 import { AppClsStore } from '../src/common/context/app-cls.store';
 import { SlaQueueService } from '../src/modules/sla/services/sla-queue.service';
 import { SlaPolicyService } from '../src/modules/sla/services/sla-policy.service';
+import { SlaCalendarCalculatorService } from '../src/modules/sla/services/sla-calendar-calculator.service';
+import { TenantCalendarService } from '../src/modules/tenants/services/tenant-calendar.service';
 import { SlaEventListener } from '../src/modules/sla/listeners/sla-event.listener';
 import { TicketsRepository } from '../src/modules/tickets/repositories/tickets.repository';
 import { TicketsService } from '../src/modules/tickets/tickets.service';
@@ -49,7 +51,15 @@ describe('SLA Orchestration Engine Integration (Redis BullMQ + PostgreSQL)', () 
 
     slaQueueService = new SlaQueueService(queue);
     slaPolicyService = new SlaPolicyService(prisma);
-    eventListener = new SlaEventListener(prisma, slaPolicyService, slaQueueService);
+    const calendarCalculator = new SlaCalendarCalculatorService();
+    const tenantCalendarService = new TenantCalendarService(prisma);
+    eventListener = new SlaEventListener(
+      prisma,
+      slaPolicyService,
+      slaQueueService,
+      calendarCalculator,
+      tenantCalendarService,
+    );
 
     eventEmitter = new EventEmitter2();
     eventEmitter.on('ticket.created', (event) => eventListener.handleTicketCreated(event));
@@ -69,6 +79,7 @@ describe('SLA Orchestration Engine Integration (Redis BullMQ + PostgreSQL)', () 
     testTenantId = tenant.id;
 
     await slaPolicyService.ensureDefaultTenantPolicies(testTenantId);
+    await tenantCalendarService.updateCalendar(testTenantId, { is24x7: true });
   });
 
   afterAll(async () => {
@@ -110,8 +121,10 @@ describe('SLA Orchestration Engine Integration (Redis BullMQ + PostgreSQL)', () 
 
     // P1 resolution is 60m = 3,600,000ms.
     // Warning is at 80% = 2,880,000ms.
-    expect(warnJob!.opts.delay).toBe(2880000);
-    expect(breachJob!.opts.delay).toBe(3600000);
+    expect(warnJob!.opts.delay).toBeGreaterThanOrEqual(2870000);
+    expect(warnJob!.opts.delay).toBeLessThanOrEqual(2880000);
+    expect(breachJob!.opts.delay).toBeGreaterThanOrEqual(3590000);
+    expect(breachJob!.opts.delay).toBeLessThanOrEqual(3600000);
 
     // 3. Verify ticket DB row was updated with resolution deadline
     const updatedDbTicket = await prisma.ticket.findUnique({
@@ -164,7 +177,8 @@ describe('SLA Orchestration Engine Integration (Redis BullMQ + PostgreSQL)', () 
     // 7. Verify BullMQ jobs re-enqueued in Redis with the remaining duration!
     const resumedBreachJob = await queue.getJob(breachJobId);
     expect(resumedBreachJob).toBeDefined();
-    expect(resumedBreachJob!.opts.delay).toBe(Number(onHoldTicket!.remainingSlaMs));
+    expect(resumedBreachJob!.opts.delay).toBeGreaterThanOrEqual(Number(onHoldTicket!.remainingSlaMs) - 1000);
+    expect(resumedBreachJob!.opts.delay).toBeLessThanOrEqual(Number(onHoldTicket!.remainingSlaMs));
 
     // 8. Resolve ticket: IN_PROGRESS -> RESOLVED
     await cls.runWith({ tenantId: testTenantId, isSystemOperation: false }, async () => {

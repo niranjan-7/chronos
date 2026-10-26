@@ -64,6 +64,8 @@ model Tenant {
   ticketAuditLogs      TicketAuditLog[]
   webhookSubscriptions WebhookSubscription[]
   webhookDeliveryLogs  WebhookDeliveryLog[]
+  businessCalendar     BusinessCalendar?
+  holidays             TenantHoliday[]
 
   @@map("tenants")
 }
@@ -127,6 +129,8 @@ model Ticket {
   isBreached         Boolean        @default(false) @map("is_breached")
   isWarningSent      Boolean        @default(false) @map("is_warning_sent")
   pausedAt           DateTime?      @map("paused_at") @db.Timestamptz(6)
+  slaPausedAt        DateTime?      @map("sla_paused_at") @db.Timestamptz(6)
+  lastResumedAt      DateTime?      @map("last_resumed_at") @db.Timestamptz(6)
   remainingSlaMs     BigInt?        @map("remaining_sla_ms")
   policyVersion      Int            @default(1) @map("policy_version")
   firstResponseDueAt DateTime?      @map("first_response_due_at") @db.Timestamptz(6)
@@ -207,4 +211,37 @@ model WebhookDeliveryLog {
   @@index([tenantId, status], name: "idx_webhook_delivery_tenant_status")
   @@index([tenantId, createdAt], name: "idx_webhook_delivery_tenant_created")
   @@map("webhook_delivery_logs")
+}
+
+model BusinessCalendar {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @unique @map("tenant_id") @db.Uuid
+  name           String   @default("Default Business Calendar") @db.VarChar(255)
+  timezone       String   @default("UTC") @db.VarChar(100)
+  weeklySchedule Json     @default("{\"monday\":[{\"start\":\"09:00\",\"end\":\"17:00\"}],\"tuesday\":[{\"start\":\"09:00\",\"end\":\"17:00\"}],\"wednesday\":[{\"start\":\"09:00\",\"end\":\"17:00\"}],\"thursday\":[{\"start\":\"09:00\",\"end\":\"17:00\"}],\"friday\":[{\"start\":\"09:00\",\"end\":\"17:00\"}],\"saturday\":[],\"sunday\":[]}")
+  is24x7         Boolean  @default(false) @map("is_24x7")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId], name: "idx_calendar_tenant")
+  @@map("business_calendars")
+}
+
+model TenantHoliday {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String   @db.VarChar(255)
+  date      String   @db.VarChar(10) // Format: YYYY-MM-DD
+  isFullDay Boolean  @default(true) @map("is_full_day")
+  startTime String?  @map("start_time") @db.VarChar(5) // Format: HH:mm
+  endTime   String?  @map("end_time") @db.VarChar(5)   // Format: HH:mm
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, date], name: "idx_holidays_tenant_date")
+  @@map("tenant_holidays")
 }

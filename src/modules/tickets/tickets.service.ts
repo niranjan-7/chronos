@@ -66,6 +66,7 @@ export class TicketsService {
         metadata: (dto.metadata as Prisma.InputJsonValue) ?? {},
         firstResponseDueAt,
         resolutionDueAt,
+        lastResumedAt: new Date(),
       },
     });
 
