@@ -12,6 +12,7 @@ import { SlaModule } from './modules/sla/sla.module';
 import { RoutingModule } from './modules/routing/routing.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { OutboxModule } from './modules/outbox/outbox.module';
+import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { AppController } from './app.controller';
 import { REQUEST_ID_HEADER } from './common/constants/context.constants';
 
@@ -61,6 +62,7 @@ import { REQUEST_ID_HEADER } from './common/constants/context.constants';
     RoutingModule,
     AnalyticsModule,
     OutboxModule,
+    WebhooksModule,
   ],
   controllers: [AppController],
 })
