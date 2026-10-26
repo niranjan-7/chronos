@@ -56,6 +56,11 @@ enum OutboxStatus {
   DEAD_LETTER
 }
 
+enum RoutingMode {
+  PULL_QUEUE
+  AUTO_PUSH
+}
+
 model Tenant {
   id        String       @id @default(uuid()) @db.Uuid
   name      String       @db.VarChar(255)
@@ -74,6 +79,7 @@ model Tenant {
   businessCalendar     BusinessCalendar?
   holidays             TenantHoliday[]
   outboxEvents         OutboxEvent[]
+  agentSkills          AgentSkill[]
 
   @@map("tenants")
 }
@@ -85,14 +91,16 @@ model User {
   name      String      @db.VarChar(255)
   role      UserRole    @default(AGENT)
   status    AgentStatus @default(OFFLINE)
-  skills    String[]    @default([])
-  metadata  Json        @default("{}")
-  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  skills               String[]         @default([])
+  maxConcurrentTickets Int              @default(5) @map("max_concurrent_tickets")
+  metadata             Json             @default("{}")
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   assignedTickets Ticket[]         @relation("AssignedAgent")
   ticketAuditLogs TicketAuditLog[]
+  agentSkills     AgentSkill[]
 
   @@unique([tenantId, email], name: "uq_tenant_user_email")
   @@index([tenantId, role, status], name: "idx_users_tenant_role_status")
@@ -131,6 +139,8 @@ model Ticket {
   description        String         @db.Text
   status             TicketStatus   @default(OPEN)
   priority           TicketPriority @default(MEDIUM)
+  routingMode        RoutingMode    @default(PULL_QUEUE) @map("routing_mode")
+  requiredSkills     String[]       @default([]) @map("required_skills")
   assignedAgentId    String?        @map("assigned_agent_id") @db.Uuid
   slaPolicyId        String?        @map("sla_policy_id") @db.Uuid
   metadata           Json           @default("{}")
@@ -274,4 +284,22 @@ model OutboxEvent {
   @@index([tenantId, status], name: "idx_outbox_tenant_status")
   @@map("outbox_events")
 }
+
+model AgentSkill {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  agentId     String   @map("agent_id") @db.Uuid
+  skill       String   @db.VarChar(100)
+  proficiency Int      @default(1) // 1 to 5
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  User   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, skill], name: "uq_agent_skill")
+  @@index([tenantId, skill], name: "idx_agent_skills_tenant_skill")
+  @@map("agent_skills")
+}
+
 

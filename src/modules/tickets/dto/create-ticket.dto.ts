@@ -1,5 +1,5 @@
-import { IsEnum, IsNotEmpty, IsObject, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
-import { TicketPriority, TicketStatus } from '@prisma/client';
+import { IsArray, IsEnum, IsNotEmpty, IsObject, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { RoutingMode, TicketPriority, TicketStatus } from '@prisma/client';
 
 export class CreateTicketDto {
   @IsString()
@@ -18,6 +18,15 @@ export class CreateTicketDto {
   @IsEnum(TicketStatus)
   @IsOptional()
   status?: TicketStatus;
+
+  @IsEnum(RoutingMode)
+  @IsOptional()
+  routingMode?: RoutingMode;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  requiredSkills?: string[];
 
   @IsUUID('4')
   @IsOptional()

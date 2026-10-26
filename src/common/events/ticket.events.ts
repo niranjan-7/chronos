@@ -43,3 +43,11 @@ export class SlaBreachedEvent {
     public readonly breachedAt: Date = new Date(),
   ) {}
 }
+
+export class AgentCapacityFreedEvent {
+  constructor(
+    public readonly tenantId: string,
+    public readonly agentId: string,
+    public readonly freedAt: Date = new Date(),
+  ) {}
+}

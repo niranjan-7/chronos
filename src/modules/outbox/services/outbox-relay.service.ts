@@ -38,10 +38,12 @@ import { SlaPolicyService } from '../../sla/services/sla-policy.service';
 import { SlaCalendarCalculatorService } from '../../sla/services/sla-calendar-calculator.service';
 import { TenantCalendarService } from '../../tenants/services/tenant-calendar.service';
 import {
+  AGENT_CAPACITY_FREED_EVENT,
   TICKET_CREATED_EVENT,
   TICKET_TRANSITIONED_EVENT,
 } from '../../../common/events/domain-event.constants';
 import {
+  AgentCapacityFreedEvent,
   TicketCreatedEvent,
   TicketTransitionedEvent,
 } from '../../../common/events/ticket.events';
@@ -586,6 +588,13 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
       });
 
       this.logger.log(`[OutboxRelay] SLA Paused for ticket ${ticketId}: ${elapsedBusinessMs}ms elapsed`);
+
+      if (ticket.assignedAgentId) {
+        this.eventEmitter.emit(
+          AGENT_CAPACITY_FREED_EVENT,
+          new AgentCapacityFreedEvent(tenantId, ticket.assignedAgentId),
+        );
+      }
     }
 
     // Case 2: Resume SLA on transition from ON_HOLD to IN_PROGRESS
@@ -674,6 +683,13 @@ export class OutboxRelayService implements OnModuleInit, OnModuleDestroy {
     if (newStatus === TicketStatus.RESOLVED || newStatus === TicketStatus.CLOSED) {
       await this.cancelSlaJobs(tenantId, ticketId);
       this.logger.log(`[OutboxRelay] SLA Cleared for resolved ticket ${ticketId}`);
+
+      if (ticket.assignedAgentId) {
+        this.eventEmitter.emit(
+          AGENT_CAPACITY_FREED_EVENT,
+          new AgentCapacityFreedEvent(tenantId, ticket.assignedAgentId),
+        );
+      }
     }
 
     // Emit domain event for CQRS analytics, WebSockets, and Webhooks
