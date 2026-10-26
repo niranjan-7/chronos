@@ -3,6 +3,12 @@ import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
 
+// Polyfill BigInt serialization for Prisma BigInt fields
+(BigInt.prototype as any).toJSON = function () {
+  const intVal = Number(this);
+  return Number.isSafeInteger(intVal) ? intVal : this.toString();
+};
+
 async function bootstrap() {
   const logger = new Logger('ChronosBootstrap');
   const app = await NestFactory.create(AppModule, {
