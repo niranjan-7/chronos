@@ -65,7 +65,27 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
 
 ## ⚡ Core Engineering Pillars
 
-### 1. Horizontally Scalable WebSocket War-Room Gateway (Phase 9)
+### 1. Frontend Mission-Control Dashboard (`chronos-web`) (Phase 10)
+- **Linear/Vercel-Inspired Dark Theme System**:
+  - High-contrast operational shell built on Next.js 15 (App Router, React 19, TypeScript strict mode) and Tailwind CSS.
+  - Deep `slate-950` canvas (`#020617`), subtle `slate-800` borders, and high-visibility status telemetry:
+    - **Emerald** (`emerald-400`): Healthy queue status & active connections.
+    - **Amber** (`amber-400`): SLA Warnings ($\ge 80\%$ duration limit).
+    - **Rose with Pulsing Glow** (`rose-400` / `animate-pulse-glow`): SLA Breaches ($100\%$ limit) with escalation warnings.
+    - **Cyan** (`cyan-400`): Paused / `ON_HOLD` tickets and frozen timers.
+- **4 Operational Hub Routes**:
+  - **`/war-room`**: Real-time SLA Countdown, live incident stream, pre-aggregated CQRS metric counters, and priority distribution.
+  - **`/workspace`**: Atomic non-blocking ticket claiming (`SKIP LOCKED`), agent capacity meter ($2/5$ load), and State Machine DAG progression (`OPEN` $\rightarrow$ `ASSIGNED` $\rightarrow$ `IN_PROGRESS` $\rightarrow$ `ON_HOLD` $\rightarrow$ `RESOLVED` $\rightarrow$ `CLOSED`).
+  - **`/admin/calendars`**: Timezone business schedules (`America/New_York`, `Asia/Kolkata`, `Europe/London`), holiday exclusions, and business-time SLA deadline calculation simulator.
+  - **`/admin/webhooks`**: Enterprise outbound webhooks, HMAC-SHA256 signatures, Redis sliding-window circuit breaker states (`CLOSED`, `OPEN`, `HALF_OPEN`), and Dead Letter Queue (DLQ) 1-click re-drives.
+- **Multi-Tenant & Agent Context Switcher (`TenantContextProvider`)**:
+  - Global navigation dropdown allows switching between corporate tenants (`Acme Corp`, `Stark Industries`, `Globex Corp`) and agent personas (`Admin`, `Agent 1`, `Agent 2`).
+  - Automatically signs client-side HS256 JWT tokens using the native Web Crypto API, injects `x-tenant-id` and `Authorization: Bearer <token>` into the centralized Axios client, and resets the TanStack Query cache (`queryClient.resetQueries()`) to guarantee zero cross-tenant cache bleeding.
+- **Real-Time WebSocket Synchronization (`WarRoomSocketProvider`)**:
+  - Connects to the NestJS `/war-room` Socket.IO gateway with automatic reconnection and live latency tracking (`LIVE - <24ms`, `RECONNECTING`, `OFFLINE`).
+  - Intercepts `metrics.updated` (250ms debounced deltas), `sla.warning`, `sla.breach`, and `ticket.claimed`, directly patching the TanStack Query cache (`queryClient.setQueryData`) for instantaneous live dashboard updates without page reloads.
+
+### 2. Horizontally Scalable WebSocket War-Room Gateway (Phase 9)
 - **Horizontally Scalable Redis Pub/Sub Adapter (`RedisIoAdapter`)**:
   - Implements a custom NestJS `IoAdapter` integrated with `@socket.io/redis-adapter` and `ioredis` pub/sub duplex clients.
   - Enables multiple containerized Chronos API replicas to broadcast real-time telemetry across cluster nodes seamlessly without sticky sessions or message drops.

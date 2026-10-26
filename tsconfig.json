@@ -22,5 +22,6 @@
       "@common/*": ["src/common/*"],
       "@modules/*": ["src/modules/*"]
     }
-  }
+  },
+  "exclude": ["node_modules", "dist", "chronos-web"]
 }

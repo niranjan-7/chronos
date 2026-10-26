@@ -32,3 +32,8 @@ coverage
 
 # Prisma generated artifacts
 prisma/migrations
+
+# Frontend (chronos-web)
+chronos-web/node_modules
+chronos-web/.next
+chronos-web/out
