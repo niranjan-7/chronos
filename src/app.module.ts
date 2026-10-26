@@ -13,6 +13,7 @@ import { RoutingModule } from './modules/routing/routing.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { OutboxModule } from './modules/outbox/outbox.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
+import { WarRoomModule } from './modules/war-room/war-room.module';
 import { AppController } from './app.controller';
 import { REQUEST_ID_HEADER } from './common/constants/context.constants';
 
@@ -63,6 +64,7 @@ import { REQUEST_ID_HEADER } from './common/constants/context.constants';
     AnalyticsModule,
     OutboxModule,
     WebhooksModule,
+    WarRoomModule,
   ],
   controllers: [AppController],
 })

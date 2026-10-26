@@ -2,6 +2,7 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
+import { RedisIoAdapter } from './modules/war-room/adapters/redis-io.adapter';
 
 // Polyfill BigInt serialization for Prisma BigInt fields
 (BigInt.prototype as any).toJSON = function () {
@@ -35,6 +36,11 @@ async function bootstrap() {
     origin: '*',
     exposedHeaders: ['x-tenant-id', 'x-request-id'],
   });
+
+  // Distributed Socket.IO Redis pub/sub adapter
+  const redisIoAdapter = new RedisIoAdapter(app);
+  await redisIoAdapter.connectToRedis(configService);
+  app.useWebSocketAdapter(redisIoAdapter as any);
 
   // Enable graceful shutdown hooks for SIGINT/SIGTERM
   app.enableShutdownHooks();

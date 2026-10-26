@@ -1,4 +1,5 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../../../common/database/redis.provider';
 import { PrismaService } from '../../../common/database/prisma.service';
@@ -34,6 +35,7 @@ export class AnalyticsMetricsService {
   constructor(
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly prisma: PrismaService,
+    @Optional() private readonly eventEmitter?: EventEmitter2,
   ) {}
 
   public getRedisKey(tenantId: string): string {
@@ -45,7 +47,9 @@ export class AnalyticsMetricsService {
    */
   async increment(tenantId: string, field: string, amount = 1): Promise<number> {
     const key = this.getRedisKey(tenantId);
-    return this.redis.hincrby(key, field, amount);
+    const result = await this.redis.hincrby(key, field, amount);
+    this.eventEmitter?.emit('metrics.mutated', { tenantId, increments: { [field]: amount } });
+    return result;
   }
 
   /**
@@ -62,6 +66,7 @@ export class AnalyticsMetricsService {
     }
 
     await pipeline.exec();
+    this.eventEmitter?.emit('metrics.mutated', { tenantId, increments });
   }
 
   /**

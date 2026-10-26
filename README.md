@@ -7,7 +7,7 @@
 
 ## 🏗️ System Architecture Overview
 
-Chronos is an enterprise-grade ticket routing and SLA orchestration engine designed for high-concurrency, multi-tenant operations with zero cross-tenant data leakage, sub-millisecond CQRS read analytics, non-blocking ticket claiming, timezone-aware business calendar SLA tracking, transactional outbox zero-loss event publishing, automated SLA breach escalations, high-throughput skill-based auto-routing, and **enterprise outbound webhook dispatching with HMAC-SHA256 cryptographic signing, jittered exponential backoff, and a Redis sliding-window circuit breaker**.
+Chronos is an enterprise-grade ticket routing and SLA orchestration engine designed for high-concurrency, multi-tenant operations with zero cross-tenant data leakage, sub-millisecond CQRS read analytics, non-blocking ticket claiming, timezone-aware business calendar SLA tracking, transactional outbox zero-loss event publishing, automated SLA breach escalations, high-throughput skill-based auto-routing, enterprise outbound webhook dispatching with HMAC-SHA256 signatures, and a **horizontally scalable real-time WebSocket War-Room Gateway backed by Redis Pub/Sub**.
 
 ```
                               ┌───────────────────────────────────┐
@@ -65,7 +65,25 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
 
 ## ⚡ Core Engineering Pillars
 
-### 1. Strict Multi-Tenant Isolation (`nestjs-cls`)
+### 1. Horizontally Scalable WebSocket War-Room Gateway (Phase 9)
+- **Horizontally Scalable Redis Pub/Sub Adapter (`RedisIoAdapter`)**:
+  - Implements a custom NestJS `IoAdapter` integrated with `@socket.io/redis-adapter` and `ioredis` pub/sub duplex clients.
+  - Enables multiple containerized Chronos API replicas to broadcast real-time telemetry across cluster nodes seamlessly without sticky sessions or message drops.
+- **Multi-Tenant Handshake Authentication & Strict Room Isolation (`WarRoomGateway`)**:
+  - Authenticates WebSocket clients at connection time via JWT tokens in `client.handshake.auth.token` (with fallback to headers/query).
+  - Validates tenant and user claims, immediately terminating unauthenticated or cross-tenant spoofing attempts.
+  - Automatically partitions clients into isolated Socket.IO rooms:
+    - `tenant:${tenantId}:war-room`: Broadcasts tenant-wide operational metrics, queue counts, and SLA warnings/breaches.
+    - `tenant:${tenantId}:agent:${userId}`: Delivers personal push-routed ticket assignments directly to the matched agent.
+  - Zero cross-tenant data leakage guaranteed across socket namespaces.
+- **Sub-Millisecond Domain Event Bridges (`WarRoomEventListener`)**:
+  - Bridges internal domain events (`SlaWarningEvent`, `SlaBreachedEvent`, `TicketTransitionedEvent`, `metrics.mutated`) to the WebSocket gateway in sub-millisecond execution.
+  - Emits structured payloads containing `{ ticketId, ticketNumber, priority, status, warningAt, breachedAt, assignedAgentId }`.
+- **Throttled / Debounced Metrics Broadcast (250ms Rate-Limit)**:
+  - High-concurrency ticket mutations during load spikes accumulate counter increments (`openCount`, `atRiskCount`, `breachedCount`, `totalTickets`).
+  - Merges rapid deltas into a single consolidated payload broadcast at most once every 250ms per tenant, eliminating client browser UI thrashing while maintaining sub-second live dashboard precision.
+
+### 2. Strict Multi-Tenant Isolation (`nestjs-cls`)
 - **Thread-Safe Context**: Every HTTP request and background worker binds `tenantId` to Node's `AsyncLocalStorage` via `nestjs-cls`.
 - **Tenant Context Guard**: Inspects incoming `x-tenant-id` headers and JWT token claims. If header and token tenant claims mismatch, the request is immediately rejected with HTTP 403 (`TenantAccessDeniedException`), preventing cross-tenant spoofing.
 - **Tenant-Aware Base Repository**: [`TenantAwareRepository<T>`](src/common/database/tenant-aware.repository.ts) automatically merges `where: { tenantId }` into all reads, and injects `data: { tenantId }` into all mutations. Direct entity queries by ID execute `findFirst({ where: { id, tenantId } })`, preventing cross-tenant data disclosure via guessed entity UUIDs.
@@ -486,6 +504,45 @@ const socket = io('http://localhost:3000/events', {
 socket.on('ticket.claimed', (data) => console.log('Ticket Claimed:', data));
 socket.on('sla.warning', (data) => console.log('80% SLA Warning:', data));
 socket.on('sla.breached', (data) => console.log('SLA Breached & Escalated:', data));
+```
+
+### 7. Real-Time War-Room Gateway (`ws://localhost:3000/war-room`)
+Horizontally scalable, multi-replica telemetry stream authenticated via JWT:
+
+```javascript
+import { io } from 'socket.io-client';
+
+const warRoomSocket = io('http://localhost:3000/war-room', {
+  transports: ['websocket'],
+  auth: {
+    token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...', // JWT containing tenantId & userId
+  },
+});
+
+// Acknowledged and joined to isolated tenant & agent rooms
+warRoomSocket.on('authenticated', (data) => {
+  console.log('Connected to War Room:', data.rooms);
+});
+
+// 80% SLA Warning Alert
+warRoomSocket.on('sla.warning', (alert) => {
+  console.warn(`[SLA WARNING] Ticket ${alert.ticketNumber} at risk!`, alert);
+});
+
+// 100% SLA Breach Alert with Priority Escalation
+warRoomSocket.on('sla.breach', (alert) => {
+  console.error(`[SLA BREACH] Ticket ${alert.ticketNumber} escalated to ${alert.priority}!`, alert);
+});
+
+// Personal Push-Routed Ticket Assignment (Delivered only to matched agent)
+warRoomSocket.on('ticket.assigned', (assignment) => {
+  console.log(`[ASSIGNMENT] New ticket ${assignment.ticketNumber} assigned to you!`, assignment);
+});
+
+// Debounced Metrics Telemetry (at most 1 broadcast per 250ms per tenant)
+warRoomSocket.on('metrics.updated', (metrics) => {
+  console.log('[METRICS DELTA]', metrics.delta);
+});
 ```
 
 ---
