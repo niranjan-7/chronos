@@ -71,6 +71,15 @@ export class WebhooksController {
     return this.dispatcherService.getDeadLetterQueue(tenantId, take);
   }
 
+  @Get('deliveries')
+  async getDeliveryLogs(
+    @CurrentTenant() tenantId: string,
+    @Query('limit') limit?: string,
+  ) {
+    const take = limit ? parseInt(limit, 10) : 50;
+    return this.dispatcherService.getDeliveryLogs(tenantId, take);
+  }
+
   /**
    * Replays a single failed delivery from the Dead Letter Queue.
    */
@@ -106,5 +115,47 @@ export class WebhooksController {
   ) {
     await this.circuitBreakerService.resetCircuit(tenantId, endpointId);
     return { success: true, message: `Circuit breaker reset to CLOSED for endpoint ${endpointId}` };
+  }
+
+  /**
+   * Chaos Test: Trips circuit breaker for an endpoint to OPEN for 60s.
+   */
+  @Post('endpoints/:id/circuit/trip')
+  @HttpCode(HttpStatus.OK)
+  async tripCircuit(
+    @CurrentTenant() tenantId: string,
+    @Param('id') endpointId: string,
+    @Body('reason') reason?: string,
+  ) {
+    await this.circuitBreakerService.tripCircuit(
+      tenantId,
+      endpointId,
+      60,
+      reason ?? 'Chaos Simulator: Manual circuit breaker trip trigger',
+    );
+    return { success: true, message: `Circuit breaker tripped to OPEN for endpoint ${endpointId}` };
+  }
+
+  /**
+   * Chaos Test: Simulates 10 rapid 500-error webhook failures to trip circuit.
+   */
+  @Post('endpoints/:id/circuit/simulate-failures')
+  @HttpCode(HttpStatus.OK)
+  async simulateFailures(
+    @CurrentTenant() tenantId: string,
+    @Param('id') endpointId: string,
+    @Body('count') count?: number,
+  ) {
+    const failureCount = count ?? 10;
+    for (let i = 0; i < failureCount; i++) {
+      await this.circuitBreakerService.recordFailure(tenantId, endpointId, false, {
+        statusCode: 500,
+        errorMessage: 'Simulated 500 Internal Server Error (Chaos Test)',
+      });
+    }
+    return {
+      success: true,
+      message: `Recorded ${failureCount} simulated failures for endpoint ${endpointId}`,
+    };
   }
 }

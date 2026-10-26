@@ -15,7 +15,7 @@ import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { ClaimNextTicketDto, ClaimSpecificTicketDto } from './dto/claim-ticket.dto';
 import { TransitionTicketDto } from './dto/transition-ticket.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { TicketPriority, TicketStatus } from '@prisma/client';
+import { RoutingMode, TicketPriority, TicketStatus } from '@prisma/client';
 
 @Controller('tickets')
 export class TicketsController {
@@ -25,6 +25,48 @@ export class TicketsController {
   @HttpCode(HttpStatus.CREATED)
   async createTicket(@Body() dto: CreateTicketDto) {
     return this.ticketsService.createTicket(dto);
+  }
+
+  /**
+   * Concurrency & Chaos Simulator: Dispatches N rapid tickets across random priorities and skills.
+   */
+  @Post('simulate/burst')
+  @HttpCode(HttpStatus.CREATED)
+  async simulateBurst(@Body('count') count?: number) {
+    const burstCount = Math.min(50, Math.max(1, count ?? 20));
+    const priorities: TicketPriority[] = [
+      TicketPriority.URGENT,
+      TicketPriority.HIGH,
+      TicketPriority.MEDIUM,
+      TicketPriority.LOW,
+    ];
+    const skillSets = [
+      ['voice_webrtc'],
+      ['messaging_a2p'],
+      ['billing'],
+      ['rest_api'],
+      ['voice_webrtc', 'messaging_a2p'],
+      [],
+    ];
+
+    const results = [];
+    for (let i = 0; i < burstCount; i++) {
+      const priority = priorities[Math.floor(Math.random() * priorities.length)];
+      const skills = skillSets[Math.floor(Math.random() * skillSets.length)];
+      const ticket = await this.ticketsService.createTicket({
+        title: `Burst Incident #${i + 1} - ${priority} [${skills.join(',') || 'general'}]`,
+        description: `Automated chaos & high-load burst injection test event #${i + 1}`,
+        priority,
+        routingMode: RoutingMode.AUTO_PUSH,
+        requiredSkills: skills,
+      });
+      results.push(ticket);
+    }
+    return {
+      success: true,
+      count: results.length,
+      tickets: results,
+    };
   }
 
   /**

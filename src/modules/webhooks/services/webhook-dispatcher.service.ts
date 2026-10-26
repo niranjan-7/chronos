@@ -350,6 +350,22 @@ export class WebhookDispatcherService {
   }
 
   /**
+   * Returns recent webhook delivery attempts across all statuses for tenant inspection.
+   */
+  async getDeliveryLogs(tenantId: string, limit = 50) {
+    return this.prisma.webhookDeliveryAttempt.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        endpoint: {
+          select: { id: true, url: true, circuitState: true, subscribedEvents: true },
+        },
+      },
+    });
+  }
+
+  /**
    * Onboards a new webhook endpoint with AES-256-GCM secret encryption.
    */
   async createEndpoint(tenantId: string, dto: CreateWebhookEndpointDto) {

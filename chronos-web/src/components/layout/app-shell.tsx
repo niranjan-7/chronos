@@ -3,10 +3,11 @@
 import React from 'react';
 import { Sidebar } from './sidebar';
 import { Header } from './header';
+import { ChaosSimulatorDrawer } from '../chaos/chaos-simulator-drawer';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans antialiased selection:bg-indigo-500/30 selection:text-indigo-200">
+    <div className="flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans antialiased selection:bg-indigo-500/30 selection:text-indigo-200 relative">
       {/* Sidebar Navigation */}
       <Sidebar />
 
@@ -22,6 +23,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </main>
       </div>
+
+      {/* Floating Concurrency & Chaos Simulator DevTools Drawer */}
+      <ChaosSimulatorDrawer />
     </div>
   );
 }
