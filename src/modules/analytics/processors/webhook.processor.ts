@@ -23,6 +23,15 @@ export class WebhookProcessor extends WorkerHost {
     const { deliveryId, tenantId, url, secret, event, payload } = job.data;
     const currentAttempt = job.attemptsMade + 1;
 
+    // Verify delivery record still exists
+    const delivery = await this.prisma.webhookDeliveryLog.findUnique({
+      where: { id: deliveryId },
+    });
+    if (!delivery) {
+      this.logger.warn(`Webhook delivery record ${deliveryId} no longer exists. Dropping stale job.`);
+      return { skipped: true, reason: 'RECORD_NOT_FOUND' };
+    }
+
     const timestamp = Date.now().toString();
     const bodyString = JSON.stringify(payload);
 
