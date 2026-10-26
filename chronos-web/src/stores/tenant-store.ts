@@ -39,6 +39,16 @@ export const useTenantStore = create<TenantContextState>((set, get) => {
       });
     },
 
+    setAgentStatus: (status) => {
+      const currentPersona = get().activePersona;
+      set({
+        activePersona: {
+          ...currentPersona,
+          status,
+        },
+      });
+    },
+
     switchTenantAndPersona: async (tenant: Tenant, persona?: Persona) => {
       const targetPersona = persona || tenant.personas[0];
       const token = await createClientJwt(tenant.id, targetPersona.id, targetPersona.role);

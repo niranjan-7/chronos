@@ -51,6 +51,18 @@ export interface TicketAssignmentEvent {
   assignedAt: string;
 }
 
+export interface TicketAuditLog {
+  id: string;
+  ticketId: string;
+  tenantId: string;
+  actorId?: string | null;
+  previousStatus?: TicketStatus | null;
+  newStatus: TicketStatus;
+  reason?: string | null;
+  slaRemainingMs?: number | null;
+  createdAt: string;
+}
+
 export interface Ticket {
   id: string;
   tenantId: string;
@@ -68,8 +80,10 @@ export interface Ticket {
   requiredSkills: string[];
   isBreached: boolean;
   isWarningSent: boolean;
+  targetBreachAt?: string | null;
   targetResolutionAt?: string | null;
   remainingSlaMs?: number | null;
   createdAt: string;
   updatedAt: string;
+  auditLogs?: TicketAuditLog[];
 }

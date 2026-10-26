@@ -1,31 +1,32 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTenantStore } from '../../stores/tenant-store';
-import { useTelemetryStore } from '../../stores/telemetry-store';
-import { fetchLiveDashboardMetrics } from '../../lib/api-client';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
+import { fetchLiveDashboardMetrics, fetchTickets } from '../../lib/api-client';
+import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
+import { SlaCountdownTimer } from '../../components/ui/sla-countdown-timer';
+import { BreachToastContainer, BreachToastNotification } from '../../components/ui/breach-toast';
 import {
   Activity,
   AlertTriangle,
   Flame,
-  CheckCircle2,
-  Clock,
-  ShieldAlert,
   Users,
   RefreshCw,
   Radio,
+  Pause,
+  Filter,
 } from 'lucide-react';
-import { formatTimeAgo } from '../../lib/utils';
-import { LiveDashboardMetrics } from '../../types/telemetry';
+import { LiveDashboardMetrics, Ticket, TicketPriority } from '../../types/telemetry';
 
 export default function WarRoomPage() {
   const activeTenant = useTenantStore((s) => s.activeTenant);
-  const { recentAlerts } = useTelemetryStore();
+  const [breachToasts, setBreachToasts] = useState<BreachToastNotification[]>([]);
+  const [filterPriority, setFilterPriority] = useState<string>('ALL');
 
+  // 1. Live CQRS Dashboard Metrics
   const {
     data: metrics,
     isFetching,
@@ -33,31 +34,162 @@ export default function WarRoomPage() {
   } = useQuery<LiveDashboardMetrics>({
     queryKey: ['liveDashboardMetrics', activeTenant.id],
     queryFn: fetchLiveDashboardMetrics,
-    // Provide instant initial fallback metrics while loading or when backend is offline
     initialData: {
       tenantId: activeTenant.id,
       source: 'REDIS_PRE_AGGREGATED',
       cachedAt: new Date().toISOString(),
       summary: {
-        totalTickets: 24,
-        openCount: 14,
-        assignedCount: 4,
-        inProgressCount: 6,
-        onHoldCount: 2,
-        resolvedCount: 38,
+        totalTickets: 28,
+        openCount: 16,
+        assignedCount: 6,
+        inProgressCount: 7,
+        onHoldCount: 3,
+        resolvedCount: 42,
         closedCount: 120,
         breachedCount: 1,
-        atRiskCount: 3,
+        atRiskCount: 4,
       },
       priorities: {
-        urgent: 2,
-        high: 7,
-        medium: 11,
-        low: 4,
+        urgent: 3,
+        high: 8,
+        medium: 12,
+        low: 5,
       },
     },
     refetchInterval: 30000,
   });
+
+  // 2. Active Tickets Grid for Millisecond Countdown Matrix
+  const initialActiveTickets: Ticket[] = [
+    {
+      id: 'tck-urg-1',
+      tenantId: activeTenant.id,
+      ticketNumber: 'TCK-001099',
+      title: 'WebRTC Signaling Socket Timeout Under Spike Load',
+      description: 'Signaling server dropped 12% of inbound WebRTC ICE handshake requests.',
+      priority: 'URGENT',
+      status: 'IN_PROGRESS',
+      assignedAgentId: '00000000-0000-0000-0000-000000000002',
+      assignedAgent: {
+        id: '00000000-0000-0000-0000-000000000002',
+        name: 'Sarah Chen',
+        email: 'sarah.chen@acme.corp',
+      },
+      requiredSkills: ['voice_webrtc', 'messaging_a2p'],
+      isBreached: false,
+      isWarningSent: true,
+      targetBreachAt: new Date(Date.now() + 14 * 60 * 1000 + 22 * 1000).toISOString(), // 14m 22s remaining (>=80% warning)
+      createdAt: new Date(Date.now() - 48 * 60 * 1000).toISOString(), // 48m ago out of 60m
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      id: 'tck-brc-1',
+      tenantId: activeTenant.id,
+      ticketNumber: 'TCK-001088',
+      title: 'A2P SMS Gateway Carrier Queue Backlog (Exceeded SLA)',
+      description: 'Carrier network congestion caused OTP delivery latency to exceed 100% threshold.',
+      priority: 'URGENT',
+      status: 'IN_PROGRESS',
+      assignedAgentId: '00000000-0000-0000-0000-000000000003',
+      assignedAgent: {
+        id: '00000000-0000-0000-0000-000000000003',
+        name: 'David Kim',
+        email: 'david.kim@acme.corp',
+      },
+      requiredSkills: ['messaging_a2p'],
+      isBreached: true,
+      isWarningSent: true,
+      targetBreachAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(), // Overdue by 5m
+      createdAt: new Date(Date.now() - 65 * 60 * 1000).toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      id: 'tck-hld-1',
+      tenantId: activeTenant.id,
+      ticketNumber: 'TCK-001077',
+      title: 'Stripe Webhook Signature Verification Discrepancy',
+      description: 'Frozen while waiting for tenant security team to rotate HMAC signing secret.',
+      priority: 'HIGH',
+      status: 'ON_HOLD',
+      assignedAgentId: '00000000-0000-0000-0000-000000000002',
+      assignedAgent: {
+        id: '00000000-0000-0000-0000-000000000002',
+        name: 'Sarah Chen',
+        email: 'sarah.chen@acme.corp',
+      },
+      requiredSkills: ['rest_api', 'billing'],
+      isBreached: false,
+      isWarningSent: false,
+      remainingSlaMs: 7820000, // Frozen at ~2h 10m
+      createdAt: new Date(Date.now() - 110 * 60 * 1000).toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      id: 'tck-on-track-1',
+      tenantId: activeTenant.id,
+      ticketNumber: 'TCK-001066',
+      title: 'REST API Rate Limit Headers Missing on Batch Ingestion',
+      description: 'Customers requesting X-RateLimit-Reset headers on high-throughput bulk endpoints.',
+      priority: 'MEDIUM',
+      status: 'IN_PROGRESS',
+      assignedAgentId: '00000000-0000-0000-0000-000000000003',
+      assignedAgent: {
+        id: '00000000-0000-0000-0000-000000000003',
+        name: 'David Kim',
+        email: 'david.kim@acme.corp',
+      },
+      requiredSkills: ['rest_api'],
+      isBreached: false,
+      isWarningSent: false,
+      targetBreachAt: new Date(Date.now() + 8 * 3600 * 1000).toISOString(), // 8 hours remaining
+      createdAt: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      id: 'tck-open-queue-1',
+      tenantId: activeTenant.id,
+      ticketNumber: 'TCK-001055',
+      title: 'Inbound Call Routing Audio Transcoding Delay',
+      description: 'Audio packets delayed when converting Opus codecs to G.711u.',
+      priority: 'HIGH',
+      status: 'OPEN',
+      assignedAgentId: null,
+      requiredSkills: ['voice_webrtc'],
+      isBreached: false,
+      isWarningSent: false,
+      targetBreachAt: new Date(Date.now() + 2 * 3600 * 1000 + 40 * 60 * 1000).toISOString(),
+      createdAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  ];
+
+  const { data: tickets = initialActiveTickets } = useQuery<Ticket[]>({
+    queryKey: ['tickets', activeTenant.id],
+    queryFn: () => fetchTickets(),
+    initialData: initialActiveTickets,
+  });
+
+  // Handle SLA Breach callback from <SlaCountdownTimer />
+  const handleBreachTriggered = (
+    ticketId: string,
+    ticketNumber: string,
+    priority: TicketPriority,
+  ) => {
+    setBreachToasts((prev) => [
+      {
+        id: `toast-${Date.now()}-${ticketId}`,
+        ticketId,
+        ticketNumber,
+        priority: priority === 'HIGH' ? 'URGENT' : priority,
+        timestamp: new Date().toISOString(),
+      },
+      ...prev,
+    ]);
+  };
+
+  const handleDismissToast = (id: string) => {
+    setBreachToasts((prev) => prev.filter((t) => t.id !== id));
+  };
 
   const summary = metrics?.summary || {
     totalTickets: 0,
@@ -71,15 +203,33 @@ export default function WarRoomPage() {
     atRiskCount: 0,
   };
 
-  const priorities = metrics?.priorities || {
-    urgent: 0,
-    high: 0,
-    medium: 0,
-    low: 0,
-  };
+  // Filter and sort tickets by urgency: breached first, then shortest remaining time
+  const sortedTickets = useMemo(() => {
+    const list = tickets.filter((t) => {
+      if (filterPriority === 'ALL') return true;
+      return t.priority === filterPriority;
+    });
+
+    return [...list].sort((a, b) => {
+      if (a.isBreached && !b.isBreached) return -1;
+      if (!a.isBreached && b.isBreached) return 1;
+      const timeA = a.targetBreachAt ? new Date(a.targetBreachAt).getTime() : Infinity;
+      const timeB = b.targetBreachAt ? new Date(b.targetBreachAt).getTime() : Infinity;
+      return timeA - timeB;
+    });
+  }, [tickets, filterPriority]);
 
   return (
     <div className="space-y-6">
+      {/* Breach Toast Container in Bottom-Right */}
+      <BreachToastContainer
+        notifications={breachToasts}
+        onDismiss={handleDismissToast}
+        onNavigate={(id) => {
+          window.location.href = `/workspace#${id}`;
+        }}
+      />
+
       {/* Top Banner / Pulse Summary */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl border border-slate-800 bg-slate-900/30 backdrop-blur-sm">
         <div className="flex items-center gap-3">
@@ -89,15 +239,14 @@ export default function WarRoomPage() {
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-base font-semibold text-slate-100">
-                Live SLA Monitoring Feed
+                War-Room Telemetry & Countdown Matrix
               </h2>
               <Badge variant="healthy" className="text-[10px] py-0 px-1.5">
-                SUB-MILLI DISPATCH
+                CQRS SUB-50MS READS
               </Badge>
             </div>
             <p className="text-xs text-slate-400 font-mono">
-              Tenant: <span className="text-cyan-300">{activeTenant.name}</span> • Room:{' '}
-              <span className="text-slate-300">tenant:{activeTenant.id.slice(0, 8)}:war-room</span>
+              Tenant: <span className="text-cyan-300">{activeTenant.name}</span> • 60 FPS requestAnimationFrame Countdown Engine
             </p>
           </div>
         </div>
@@ -111,305 +260,219 @@ export default function WarRoomPage() {
             className="text-xs font-mono"
           >
             <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-            Sync CQRS Hash
+            Sync Redis Live Hashes
           </Button>
         </div>
       </div>
 
-      {/* Primary KPI Status Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* 1. Open Active Queue */}
+      {/* 5 Top High-Contrast KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        {/* 1. Active Open Tickets */}
         <Card className="border-slate-800 bg-slate-900/40 relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/5 rounded-full blur-2xl" />
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider font-mono">
-              Open Queue
+              Active Open
             </span>
             <Activity className="w-4 h-4 text-indigo-400" />
           </div>
-          <div className="flex items-baseline justify-between">
-            <div className="text-3xl font-extrabold text-slate-100 font-mono tracking-tight">
-              {summary.openCount}
-            </div>
-            <Badge variant="neutral" className="text-[10px]">
-              {summary.totalTickets} total
-            </Badge>
+          <div className="text-3xl font-extrabold text-slate-100 font-mono tracking-tight">
+            {summary.openCount}
           </div>
           <p className="text-[11px] text-slate-500 font-mono mt-2">
             {summary.inProgressCount} in progress • {summary.assignedCount} assigned
           </p>
         </Card>
 
-        {/* 2. SLA Warning (>=80% Duration) */}
-        <Card className="border-amber-500/30 bg-amber-950/10 relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/10 rounded-full blur-2xl" />
+        {/* 2. At-Risk (80% SLA Warning) */}
+        <Card className="border-amber-500/40 bg-amber-950/15 relative overflow-hidden shadow-[0_0_15px_rgba(245,158,11,0.1)]">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold text-amber-400 uppercase tracking-wider font-mono">
-              At-Risk Warning (≥80%)
+              At-Risk (≥80%)
             </span>
             <AlertTriangle className="w-4 h-4 text-amber-400 animate-bounce" />
           </div>
-          <div className="flex items-baseline justify-between">
-            <div className="text-3xl font-extrabold text-amber-300 font-mono tracking-tight">
-              {summary.atRiskCount}
-            </div>
-            <Badge variant="warning" className="text-[10px]">
-              AT RISK
-            </Badge>
+          <div className="text-3xl font-extrabold text-amber-300 font-mono tracking-tight">
+            {summary.atRiskCount}
           </div>
           <p className="text-[11px] text-amber-500/80 font-mono mt-2">
-            Approaching deadline limit
+            Approaching breach limit
           </p>
         </Card>
 
-        {/* 3. SLA Breached (100% Limit) */}
+        {/* 3. Breached (100% SLA) */}
         <Card
           className={`relative overflow-hidden transition-all ${
             summary.breachedCount > 0
-              ? 'border-rose-500/50 bg-rose-950/20 shadow-[0_0_20px_rgba(244,63,94,0.15)] animate-pulse-glow'
+              ? 'border-rose-500/60 bg-rose-950/25 shadow-[0_0_20px_rgba(244,63,94,0.2)] animate-pulse-glow'
               : 'border-slate-800 bg-slate-900/40'
           }`}
         >
-          <div className="absolute top-0 right-0 w-24 h-24 bg-rose-500/15 rounded-full blur-2xl" />
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold text-rose-400 uppercase tracking-wider font-mono">
-              SLA Breached (100%)
+              Breached (100%)
             </span>
             <Flame className="w-4 h-4 text-rose-400 animate-pulse" />
           </div>
-          <div className="flex items-baseline justify-between">
-            <div className="text-3xl font-extrabold text-rose-300 font-mono tracking-tight">
-              {summary.breachedCount}
-            </div>
-            <Badge variant="breach" className="text-[10px]">
-              CRITICAL
-            </Badge>
+          <div className="text-3xl font-extrabold text-rose-300 font-mono tracking-tight">
+            {summary.breachedCount}
           </div>
           <p className="text-[11px] text-rose-400/80 font-mono mt-2">
-            Auto-escalated in BullMQ
+            Escalated in BullMQ queue
           </p>
         </Card>
 
-        {/* 4. On-Hold / Paused Tickets */}
-        <Card className="border-cyan-500/30 bg-cyan-950/10 relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-24 h-24 bg-cyan-500/10 rounded-full blur-2xl" />
+        {/* 4. Paused (On-Hold) */}
+        <Card className="border-cyan-500/40 bg-cyan-950/15 relative overflow-hidden">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold text-cyan-400 uppercase tracking-wider font-mono">
-              Paused SLA (ON_HOLD)
+              Paused (On-Hold)
             </span>
-            <Clock className="w-4 h-4 text-cyan-400" />
+            <Pause className="w-4 h-4 text-cyan-400" />
           </div>
-          <div className="flex items-baseline justify-between">
-            <div className="text-3xl font-extrabold text-cyan-300 font-mono tracking-tight">
-              {summary.onHoldCount}
-            </div>
-            <Badge variant="paused" className="text-[10px]">
-              FROZEN
-            </Badge>
+          <div className="text-3xl font-extrabold text-cyan-300 font-mono tracking-tight">
+            {summary.onHoldCount}
           </div>
           <p className="text-[11px] text-cyan-400/80 font-mono mt-2">
-            Timer paused until IN_PROGRESS
+            SLA timers frozen
+          </p>
+        </Card>
+
+        {/* 5. Online Agent Capacity */}
+        <Card className="border-emerald-500/30 bg-emerald-950/15 relative overflow-hidden">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider font-mono">
+              Agent Capacity
+            </span>
+            <Users className="w-4 h-4 text-emerald-400" />
+          </div>
+          <div className="text-3xl font-extrabold text-emerald-300 font-mono tracking-tight">
+            {summary.assignedCount + summary.inProgressCount} / 25
+          </div>
+          <p className="text-[11px] text-emerald-400/80 font-mono mt-2">
+            Live concurrency load slots
           </p>
         </Card>
       </div>
 
-      {/* Priority Breakdown & Real-Time Alert Stream */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Real-Time SLA Alert Stream */}
-        <div className="lg:col-span-2 space-y-4">
-          <Card className="border-slate-800 bg-slate-900/40">
-            <CardHeader className="flex flex-row items-center justify-between border-b border-slate-800/80 pb-3">
-              <div>
-                <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4 text-rose-400" />
-                  Real-Time SLA Warning & Breach Telemetry
-                </CardTitle>
-                <CardDescription className="font-mono text-[11px]">
-                  Sub-millisecond domain events pushed over Redis Pub/Sub WebSocket adapter
-                </CardDescription>
+      {/* Filter and Priority Tabs Bar */}
+      <div className="flex items-center justify-between p-3 rounded-xl border border-slate-800 bg-slate-900/40">
+        <div className="flex items-center gap-2">
+          <Filter className="w-4 h-4 text-slate-400" />
+          <span className="text-xs font-mono text-slate-300">Filter Urgency:</span>
+          {['ALL', 'URGENT', 'HIGH', 'MEDIUM', 'LOW'].map((p) => (
+            <button
+              key={p}
+              onClick={() => setFilterPriority(p)}
+              className={`px-2.5 py-1 rounded text-xs font-mono font-medium transition-colors cursor-pointer ${
+                filterPriority === p
+                  ? 'bg-slate-800 text-white border border-slate-700'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+
+        <span className="text-xs font-mono text-slate-500">
+          Showing {sortedTickets.length} active countdown timers
+        </span>
+      </div>
+
+      {/* Live SLA Millisecond Countdown Matrix */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {sortedTickets.map((ticket) => (
+          <Card
+            key={ticket.id}
+            className={`border transition-all hover:border-slate-700 ${
+              ticket.isBreached
+                ? 'border-rose-500/60 bg-rose-950/10 shadow-[0_0_15px_rgba(244,63,94,0.15)]'
+                : ticket.isWarningSent
+                ? 'border-amber-500/40 bg-amber-950/10'
+                : ticket.status === 'ON_HOLD'
+                ? 'border-cyan-500/30 bg-cyan-950/10'
+                : 'border-slate-800 bg-slate-900/40'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3 mb-2">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs font-bold text-slate-100 px-2 py-0.5 rounded bg-slate-800 border border-slate-700">
+                  {ticket.ticketNumber}
+                </span>
+                <Badge
+                  variant={
+                    ticket.priority === 'URGENT'
+                      ? 'urgent'
+                      : ticket.priority === 'HIGH'
+                      ? 'high'
+                      : 'medium'
+                  }
+                  className="text-[10px] py-0 px-1.5"
+                >
+                  {ticket.priority}
+                </Badge>
               </div>
-              <Badge variant="healthy" className="text-[10px]">
-                LIVE STREAM
+
+              <Badge
+                variant={
+                  ticket.status === 'IN_PROGRESS'
+                    ? 'healthy'
+                    : ticket.status === 'ON_HOLD'
+                    ? 'paused'
+                    : ticket.status === 'RESOLVED'
+                    ? 'neutral'
+                    : 'warning'
+                }
+                className="text-[10px] py-0 px-1.5"
+              >
+                {ticket.status}
               </Badge>
-            </CardHeader>
+            </div>
 
-            <CardContent className="pt-4">
-              {recentAlerts.length === 0 ? (
-                <div className="py-12 text-center space-y-2">
-                  <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto opacity-80" />
-                  <p className="text-sm font-medium text-slate-300">
-                    No Active SLA Breaches or Warnings
-                  </p>
-                  <p className="text-xs text-slate-500 font-mono max-w-sm mx-auto">
-                    All tenant tickets are currently tracking within their 80% resolution targets.
-                    Incoming WebSocket alerts will populate here in real time.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
-                  {recentAlerts.map((alert, idx) => {
-                    const isBreach = alert.type === 'BREACH';
-                    return (
-                      <div
-                        key={`${alert.ticketId}-${idx}`}
-                        className={`p-3 rounded-lg border flex items-center justify-between transition-all ${
-                          isBreach
-                            ? 'border-rose-500/30 bg-rose-950/20'
-                            : 'border-amber-500/30 bg-amber-950/20'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          {isBreach ? (
-                            <Flame className="w-5 h-5 text-rose-400 shrink-0 animate-pulse" />
-                          ) : (
-                            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
-                          )}
+            <h4 className="text-sm font-semibold text-slate-100 line-clamp-1 mb-1">
+              {ticket.title}
+            </h4>
+            <p className="text-xs text-slate-400 line-clamp-2 mb-3">
+              {ticket.description}
+            </p>
 
-                          <div className="flex flex-col">
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono text-xs font-bold text-slate-100">
-                                {alert.ticketNumber}
-                              </span>
-                              <Badge
-                                variant={isBreach ? 'breach' : 'warning'}
-                                className="text-[10px] py-0 px-1.5"
-                              >
-                                {isBreach ? '100% BREACH' : '80% WARNING'}
-                              </Badge>
-                              <Badge variant="urgent" className="text-[10px] py-0 px-1.5">
-                                {alert.priority}
-                              </Badge>
-                            </div>
-                            <span className="text-[11px] text-slate-400 font-mono mt-0.5">
-                              Status: <span className="text-slate-300">{alert.status}</span>
-                              {alert.assignedAgentId && (
-                                <> • Agent: {alert.assignedAgentId.slice(0, 8)}</>
-                              )}
-                            </span>
-                          </div>
-                        </div>
+            {/* Live Countdown Timer Component */}
+            <SlaCountdownTimer
+              ticketId={ticket.id}
+              ticketNumber={ticket.ticketNumber}
+              priority={ticket.priority}
+              status={ticket.status}
+              createdAt={ticket.createdAt}
+              targetBreachAt={ticket.targetBreachAt}
+              remainingSlaMs={ticket.remainingSlaMs}
+              isBreached={ticket.isBreached}
+              onBreachTriggered={handleBreachTriggered}
+              className="mb-3"
+            />
 
-                        <div className="flex flex-col items-end text-right">
-                          <span className="text-[10px] font-mono text-slate-400">
-                            {formatTimeAgo(alert.timestamp)}
-                          </span>
-                          <span className="text-[10px] font-mono text-slate-500">
-                            {new Date(alert.timestamp).toLocaleTimeString()}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
+            {/* Footer with Agent and Skill Tags */}
+            <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-[11px] font-mono text-slate-400">
+              <span className="truncate">
+                {ticket.assignedAgent ? (
+                  <span className="text-slate-300">Agent: {ticket.assignedAgent.name}</span>
+                ) : (
+                  <span className="text-slate-500 italic">Unassigned (Pool)</span>
+                )}
+              </span>
+
+              <div className="flex items-center gap-1">
+                {ticket.requiredSkills.map((skill) => (
+                  <span
+                    key={skill}
+                    className="px-1.5 py-0.2 rounded text-[9px] bg-slate-950 border border-slate-800 text-slate-400"
+                  >
+                    {skill}
+                  </span>
+                ))}
+              </div>
+            </div>
           </Card>
-        </div>
-
-        {/* Right Column: Workload Distribution by Priority */}
-        <div className="space-y-4">
-          <Card className="border-slate-800 bg-slate-900/40">
-            <CardHeader className="border-b border-slate-800/80 pb-3">
-              <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                <Users className="w-4 h-4 text-cyan-400" />
-                Priority Breakdown
-              </CardTitle>
-              <CardDescription className="font-mono text-[11px]">
-                Pre-aggregated Redis live counters
-              </CardDescription>
-            </CardHeader>
-
-            <CardContent className="pt-4 space-y-4">
-              {/* Urgent */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs font-mono">
-                  <span className="text-rose-400 font-semibold flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-rose-500" />
-                    URGENT
-                  </span>
-                  <span className="text-slate-200 font-bold">{priorities.urgent}</span>
-                </div>
-                <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-rose-500 rounded-full transition-all duration-300"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        (priorities.urgent / Math.max(1, summary.openCount)) * 100,
-                      )}%`,
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* High */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs font-mono">
-                  <span className="text-orange-400 font-semibold flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-orange-500" />
-                    HIGH
-                  </span>
-                  <span className="text-slate-200 font-bold">{priorities.high}</span>
-                </div>
-                <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-orange-500 rounded-full transition-all duration-300"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        (priorities.high / Math.max(1, summary.openCount)) * 100,
-                      )}%`,
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Medium */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs font-mono">
-                  <span className="text-yellow-400 font-semibold flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-yellow-500" />
-                    MEDIUM
-                  </span>
-                  <span className="text-slate-200 font-bold">{priorities.medium}</span>
-                </div>
-                <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-yellow-500 rounded-full transition-all duration-300"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        (priorities.medium / Math.max(1, summary.openCount)) * 100,
-                      )}%`,
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Low */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs font-mono">
-                  <span className="text-blue-400 font-semibold flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-blue-500" />
-                    LOW
-                  </span>
-                  <span className="text-slate-200 font-bold">{priorities.low}</span>
-                </div>
-                <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-500 rounded-full transition-all duration-300"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        (priorities.low / Math.max(1, summary.openCount)) * 100,
-                      )}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        ))}
       </div>
     </div>
   );
