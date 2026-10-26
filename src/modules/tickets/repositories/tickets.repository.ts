@@ -1,6 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
-import { Prisma, Ticket, TicketAuditLog, TicketPriority, TicketStatus } from '@prisma/client';
+import { OutboxStatus, Prisma, Ticket, TicketAuditLog, TicketPriority, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../../../common/database/prisma.service';
 import { TenantAwareRepository } from '../../../common/database/tenant-aware.repository';
 import { AppClsStore } from '../../../common/context/app-cls.store';
@@ -133,6 +133,25 @@ export class TicketsRepository extends TenantAwareRepository<
         },
       });
 
+      // 5. Create OutboxEvent in the EXACT SAME transaction
+      await tx.outboxEvent.create({
+        data: {
+          tenantId,
+          aggregateType: 'TICKET',
+          aggregateId: candidate.id,
+          eventType: 'ticket.claimed',
+          payload: {
+            tenantId,
+            ticketId: candidate.id,
+            agentId,
+            priority: candidate.priority,
+            status: TicketStatus.ASSIGNED,
+            claimedAt: new Date().toISOString(),
+          },
+          status: OutboxStatus.PENDING,
+        },
+      });
+
       return {
         claimed: true,
         ticket: updatedTicket,
@@ -223,6 +242,24 @@ export class TicketsRepository extends TenantAwareRepository<
         },
       });
 
+      // 5. Create OutboxEvent in the EXACT SAME transaction
+      await tx.outboxEvent.create({
+        data: {
+          tenantId,
+          aggregateType: 'TICKET',
+          aggregateId: ticketId,
+          eventType: 'ticket.claimed',
+          payload: {
+            tenantId,
+            ticketId,
+            agentId,
+            status: TicketStatus.ASSIGNED,
+            claimedAt: new Date().toISOString(),
+          },
+          status: OutboxStatus.PENDING,
+        },
+      });
+
       return updated;
     });
   }
@@ -309,7 +346,92 @@ export class TicketsRepository extends TenantAwareRepository<
         },
       });
 
+      // 5. Create OutboxEvent in the EXACT SAME transaction
+      await tx.outboxEvent.create({
+        data: {
+          tenantId,
+          aggregateType: 'TICKET',
+          aggregateId: params.ticketId,
+          eventType: 'ticket.status_changed',
+          payload: {
+            tenantId,
+            ticketId: params.ticketId,
+            previousStatus: current.status,
+            newStatus: params.targetStatus,
+            actorId,
+            reason: params.reason,
+            transitionedAt: new Date().toISOString(),
+          },
+          status: OutboxStatus.PENDING,
+        },
+      });
+
       return updated;
+    });
+  }
+
+  /**
+   * Atomically creates a Ticket, initial TicketAuditLog, and PENDING OutboxEvent
+   * within a single PostgreSQL database transaction.
+   */
+  async createTicketWithOutbox(params: {
+    data: Omit<Prisma.TicketUncheckedCreateInput, 'tenantId'>;
+    actorId?: string | null;
+  }): Promise<Ticket> {
+    const tenantId = this.getTenantId();
+
+    return this.prisma.$transaction(async (tx) => {
+      // 1. Create Ticket
+      const ticket = await tx.ticket.create({
+        data: {
+          ...params.data,
+          tenantId,
+        },
+        include: {
+          assignedAgent: {
+            select: { id: true, name: true, email: true, role: true },
+          },
+          slaPolicy: true,
+        },
+      });
+
+      // 2. Create Audit Log
+      await tx.ticketAuditLog.create({
+        data: {
+          tenantId,
+          ticketId: ticket.id,
+          actorId: params.actorId ?? ticket.assignedAgentId ?? null,
+          action: 'TICKET_CREATED',
+          changes: {
+            status: ticket.status,
+            priority: ticket.priority,
+            ticketNumber: ticket.ticketNumber,
+            assignedAgentId: ticket.assignedAgentId,
+          },
+        },
+      });
+
+      // 3. Create OutboxEvent in the EXACT SAME transaction
+      await tx.outboxEvent.create({
+        data: {
+          tenantId,
+          aggregateType: 'TICKET',
+          aggregateId: ticket.id,
+          eventType: 'ticket.created',
+          payload: {
+            tenantId,
+            ticketId: ticket.id,
+            ticketNumber: ticket.ticketNumber,
+            priority: ticket.priority,
+            status: ticket.status,
+            slaPolicyId: ticket.slaPolicyId,
+            createdAt: ticket.createdAt.toISOString(),
+          },
+          status: OutboxStatus.PENDING,
+        },
+      });
+
+      return ticket;
     });
   }
 

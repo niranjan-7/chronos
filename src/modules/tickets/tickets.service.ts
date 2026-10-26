@@ -28,7 +28,7 @@ export class TicketsService {
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
-  async createTicket(dto: CreateTicketDto): Promise<Ticket> {
+  async createTicket(dto: CreateTicketDto, authenticatedUserId?: string): Promise<Ticket> {
     const tenantId = this.ticketsRepository.getTenantId();
 
     // 1. Resolve SLA due dates if SLA policy is provided
@@ -51,10 +51,10 @@ export class TicketsService {
     const count = await this.ticketsRepository.count();
     const ticketNumber = `TCK-${(count + 1).toString().padStart(6, '0')}`;
 
-    // 3. Create ticket via tenant-aware repository
+    // 3. Create ticket atomically with OutboxEvent & AuditLog (Dual-Write Prevention)
     const initialStatus = dto.status ?? (dto.assignedAgentId ? TicketStatus.ASSIGNED : TicketStatus.OPEN);
 
-    const ticket = await this.ticketsRepository.create<Prisma.TicketUncheckedCreateInput>({
+    const ticket = await this.ticketsRepository.createTicketWithOutbox({
       data: {
         ticketNumber,
         title: dto.title,
@@ -68,32 +68,8 @@ export class TicketsService {
         resolutionDueAt,
         lastResumedAt: new Date(),
       },
+      actorId: authenticatedUserId ?? dto.assignedAgentId ?? null,
     });
-
-    // 4. Record audit log
-    await this.ticketsRepository.createAuditLog({
-      ticketId: ticket.id,
-      action: 'TICKET_CREATED',
-      changes: {
-        status: ticket.status,
-        priority: ticket.priority,
-        ticketNumber: ticket.ticketNumber,
-        assignedAgentId: ticket.assignedAgentId,
-      },
-    });
-
-    // 5. Emit domain event for event-driven SLA scheduling
-    this.eventEmitter.emit(
-      TICKET_CREATED_EVENT,
-      new TicketCreatedEvent(
-        ticket.tenantId,
-        ticket.id,
-        ticket.ticketNumber,
-        ticket.priority,
-        ticket.slaPolicyId,
-        ticket.createdAt,
-      ),
-    );
 
     return ticket;
   }

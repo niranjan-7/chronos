@@ -19,6 +19,8 @@ import {
   getSlaBreachJobId,
 } from '../src/modules/sla/constants/sla.constants';
 import { SlaJobPayload } from '../src/modules/sla/interfaces/sla-job-payload.interface';
+import { OutboxRelayService } from '../src/modules/outbox/services/outbox-relay.service';
+import { ConfigService } from '@nestjs/config';
 
 describe('Phase 5: Timezone-Aware Business Calendar SLA Integration', () => {
   let prisma: PrismaService;
@@ -31,6 +33,7 @@ describe('Phase 5: Timezone-Aware Business Calendar SLA Integration', () => {
   let tenantCalendarService: TenantCalendarService;
   let eventListener: SlaEventListener;
   let ticketsService: TicketsService;
+  let outboxRelayService: OutboxRelayService;
 
   let testTenantId: string;
   const testTenantSlug = `calendar-integ-${Date.now()}`;
@@ -64,8 +67,17 @@ describe('Phase 5: Timezone-Aware Business Calendar SLA Integration', () => {
     );
 
     eventEmitter = new EventEmitter2();
-    eventEmitter.on('ticket.created', (event) => eventListener.handleTicketCreated(event));
-    eventEmitter.on('ticket.transitioned', (event) => eventListener.handleTicketTransitioned(event));
+    const configService = new ConfigService();
+    outboxRelayService = new OutboxRelayService(
+      prisma,
+      configService,
+      queue,
+      slaPolicyService,
+      calendarCalculator,
+      tenantCalendarService,
+      eventEmitter,
+    );
+    await outboxRelayService.onModuleInit();
 
     const stateMachine = new TicketStateMachine();
     const ticketsRepo = new TicketsRepository(prisma, cls, stateMachine);
@@ -107,6 +119,9 @@ describe('Phase 5: Timezone-Aware Business Calendar SLA Integration', () => {
   });
 
   afterAll(async () => {
+    if (outboxRelayService) {
+      await outboxRelayService.onModuleDestroy();
+    }
     if (testTenantId) {
       await prisma.tenant.delete({
         where: { id: testTenantId },

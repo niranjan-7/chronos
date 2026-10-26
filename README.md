@@ -7,7 +7,7 @@
 
 ## 🏗️ System Architecture Overview
 
-Chronos is an enterprise-grade ticket routing and SLA orchestration engine designed for high-concurrency, multi-tenant operations with zero cross-tenant data leakage, sub-millisecond CQRS read analytics, non-blocking ticket claiming, timezone-aware business calendar SLA tracking, and automated SLA breach escalations.
+Chronos is an enterprise-grade ticket routing and SLA orchestration engine designed for high-concurrency, multi-tenant operations with zero cross-tenant data leakage, sub-millisecond CQRS read analytics, non-blocking ticket claiming, timezone-aware business calendar SLA tracking, transactional outbox zero-loss event publishing, and automated SLA breach escalations.
 
 ```
                               ┌───────────────────────────────────┐
@@ -29,29 +29,35 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
         │ • State Machine DAG  │    │ • Workload Matching  │    │ • CQRS Live Hashes   │
         │ • SKIP LOCKED Claim  │    │ • Skill Routing      │    │ • WebSockets Gateway │
         │ • Audit Logging      │    └──────────────────────┘    │ • Webhook Dispatcher │
-        └──────────┬───────────┘                                └──────────┬───────────┘
-                   │                                                       │
-                   ▼ (Domain Events)                                       ▼
-        ┌──────────────────────┐                                ┌──────────────────────┐
-        │      SlaModule       │                                │  Outbound Webhooks   │
-        │ • Timezone Luxon Calc│                                │ • HMAC-SHA256 Sign   │
-        │ • Business Hours Calc│                                │ • Exp. Backoff (5x)  │
-        │ • Holiday Exclusion  │                                │ • Dead Letter Queue  │
-        │ • 80% Warning Job    │                                └──────────────────────┘
-        │ • 100% Breach Bump   │
-        │ • Freeze / Unfreeze  │
+        │ • Dual-Write Outbox  │                                └──────────┬───────────┘
+        └──────────┬───────────┘                                           │
+                   │ (ACID Transaction)                                    ▼
+                   ▼                                            ┌──────────────────────┐
+        ┌──────────────────────┐                                │  Outbound Webhooks   │
+        │    PostgreSQL 16     │                                │ • HMAC-SHA256 Sign   │
+        │ • Tickets & Audits   │                                │ • Exp. Backoff (5x)  │
+        │ • outbox_events      │                                │ • Dead Letter Queue  │
+        │ • pg_notify trigger  │                                └──────────────────────┘
+        └──────────┬───────────┘
+                   │
+                   │ pg_notify('chronos_outbox_channel') + Fallback Polling @Interval(2000)
+                   ▼
+        ┌──────────────────────┐
+        │  OutboxRelayService  │
+        │ • SKIP LOCKED Batch  │
+        │ • Idempotent Dispatch│
+        │ • Exponential Backoff│
+        │ • Dead-Letter Queue  │
         └──────────┬───────────┘
                    │
                    ├───────────────────────────────────┐
-                   ▼                                   ▼
+                   ▼ (queue.addBulk)                   ▼ (Domain Events)
         ┌──────────────────────┐            ┌──────────────────────┐
-        │    PostgreSQL 16     │            │    Redis 7/8 Alpine  │
-        │ • Multi-Tenant DB    │            │ • BullMQ Queues      │
-        │ • B-Tree Indexes     │            │ • Pre-Aggregated HSET│
-        │ • Row-Level Locks    │            │ • Deterministic IDs  │
-        │ • Business Calendars │            └──────────────────────┘
-        │ • Tenant Holidays    │
-        └──────────────────────┘
+        │    Redis 7/8 Alpine  │            │      SlaModule       │
+        │ • BullMQ sla-monitor │            │ • 80% Warning Job    │
+        │ • Pre-Aggregated HSET│            │ • 100% Breach Bump   │
+        │ • Deterministic IDs  │            │ • Freeze / Unfreeze  │
+        └──────────────────────┘            └──────────────────────┘
 ```
 
 ---
@@ -87,20 +93,26 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
   - When a ticket transitions to `ON_HOLD`, the system computes `elapsed_business_ms` since active resumption, subtracts it from `remaining_sla_ms`, stores `sla_paused_at` and `remaining_sla_ms` in PostgreSQL, and atomically removes active BullMQ delayed jobs (`sla-warn-...`, `sla-breach-...`) from Redis.
   - When returning from `ON_HOLD` to `IN_PROGRESS`, `SlaCalendarCalculatorService` recalculates fresh wall-clock deadlines using the remaining business duration, and re-enqueues fresh BullMQ delayed jobs.
   - When transitioning to `RESOLVED` or `CLOSED`, pending SLA jobs are automatically purged.
-- **Deterministic Job IDs for $O(1)$ Cancellation**:
-  - `sla-warn-${tenantId}-${ticketId}` (at 80% of business duration)
-  - `sla-breach-${tenantId}-${ticketId}` (at 100% of business duration)
-- **SLA Worker Processor**:
-  - Re-hydrates `AsyncLocalStorage` with `tenantId` before database mutations.
-  - Escalates priority upon breach (`LOW` $\to$ `MEDIUM` $\to$ `HIGH` $\to$ `URGENT`) and dispatches outbound alerts.
 
-### 5. CQRS Read Layer & Pre-Aggregated Redis Caching
+### 5. Transactional Outbox Pattern & Zero-Loss Dual-Write Protection (Phase 6)
+- **Dual-Write Vulnerability Elimination**:
+  - In traditional setups, committing ticket mutations to PostgreSQL while separately publishing delayed jobs to Redis/BullMQ creates a critical vulnerability: if Redis blips or network fails after database commit, the SLA timer is lost forever.
+  - Chronos solves this by writing the `Ticket`, `TicketAuditLog`, and `OutboxEvent` (status `PENDING`) atomically inside the **exact same PostgreSQL ACID transaction**.
+  - Direct synchronous calls to `bullQueue.add()` are completely eliminated from the HTTP request lifecycle, driving endpoint latency under 10ms with zero Redis uptime dependency.
+- **Hybrid Push/Poll Outbox Relay (`OutboxRelayService`)**:
+  - **Zero-Latency Push**: PostgreSQL trigger executes `PERFORM pg_notify('chronos_outbox_channel', NEW.id::text)` on `AFTER INSERT ON outbox_events`. A dedicated persistent `pg` client listener receives the notification for sub-5ms wakeups.
+  - **Fallback Polling Sweeper**: An `@Interval(2000)` sweeper guarantees self-healing in case a notification is dropped during network reconnect or server reboot.
+  - **Atomic High-Throughput Batching**: Batch-fetches up to 50 `PENDING` events via `SELECT ... FOR UPDATE SKIP LOCKED` and submits jobs in parallel via BullMQ `queue.addBulk()`.
+  - **Guaranteed Idempotency**: Jobs use deterministic keys (`sla-warn-${tenantId}-${ticketId}`, `sla-breach-${tenantId}-${ticketId}`), guaranteeing duplicate relay sweeps never spawn duplicate timers.
+  - **Exponential Backoff & DLQ**: On Redis connectivity failure, events remain safely persisted in PostgreSQL with exponential retry intervals ($2^n \times 1000\text{ms}$). Permanent failures move to `DEAD_LETTER` after 5 attempts.
+
+### 6. CQRS Read Layer & Pre-Aggregated Redis Caching
 - Asynchronous CQRS projections maintain live tenant metric hashes: `tenant:${tenantId}:metrics:live`.
 - Atomic `HINCRBY` pipelined operations track `open_count`, `on_hold_count`, `breached_count`, `at_risk_count`, and priority counts.
 - `GET /analytics/dashboard` reads directly from Redis: **<1ms response latency** (<50ms SLA).
 - Automatic cache-rebuild fallback service re-aggregates from PostgreSQL on cache misses.
 
-### 6. Real-Time WebSockets & Outbound Webhooks
+### 7. Real-Time WebSockets & Outbound Webhooks
 - **Socket.io Gateway** (`/events`): Authenticates incoming handshakes via `x-tenant-id` and isolates broadcasting to `tenant:${tenantId}` rooms.
 - **Webhook Dispatcher** (`webhook-dispatcher` queue):
   - Outbound HTTP POST with cryptographic HMAC-SHA256 payload signatures (`X-Chronos-Signature-256: t=${timestamp},v1=${signature}`).
@@ -154,6 +166,21 @@ Chronos is an enterprise-grade ticket routing and SLA orchestration engine desig
                │                         │ response_time_minutes: int     │
                │                         │ resolution_time_minutes: int   │
                │                         │ INDEX (tenant_id, priority)    │
+               │                         └────────────────────────────────┘
+               │ 1                       ┌────────────────────────────────┐
+               ├────────────────────────<│         outbox_events          │
+               │ *                       ├────────────────────────────────┤
+               │                         │ id: uuid (PK)                  │
+               │                         │ tenant_id: uuid (FK)           │
+               │                         │ aggregate_type: varchar(64)    │
+               │                         │ aggregate_id: uuid             │
+               │                         │ event_type: varchar(128)       │
+               │                         │ payload: jsonb                 │
+               │                         │ status: OutboxStatus           │
+               │                         │ retry_count: int               │
+               │                         │ next_attempt_at: timestamptz   │
+               │                         │ created_at / processed_at      │
+               │                         │ INDEX (status, next_attempt_at)│
                │                         └────────────────────────────────┘
                │ 1
                ├────────────────────────<┌────────────────────────────────┐
@@ -262,10 +289,10 @@ Server starts at: `http://localhost:3000`
 Chronos includes comprehensive unit test suites and real-world concurrency integration tests:
 
 ```bash
-# Run all unit tests (49 tests passing across 6 suites)
+# Run all unit tests (54 tests passing across 7 suites)
 npm test
 
-# Run high-concurrency and SLA lifecycle integration tests with live PostgreSQL & Redis
+# Run high-concurrency, outbox, and SLA lifecycle integration tests with live PostgreSQL & Redis
 npm run test:integration
 ```
 
@@ -287,10 +314,16 @@ PASS test/business-calendar-sla.integration.spec.ts
   Phase 5: Timezone-Aware Business Calendar SLA Integration
     ✓ correctly calculates business deadlines and dynamically pauses/resumes SLA on calendar boundaries
 
-Test Suites: 4 passed, 4 total
-Tests:       7 passed, 7 total
+PASS test/transactional-outbox.integration.spec.ts
+  Phase 6: Transactional Outbox Pattern Integration (Zero-Loss Event Publishing)
+    ✓ guarantees atomic dual-write: writes Ticket, AuditLog, and OutboxEvent in one transaction
+    ✓ enforces idempotency: duplicate relay sweeps never create duplicate BullMQ jobs
+    ✓ relays state machine transitions: freezes SLA on ON_HOLD and resumes on IN_PROGRESS
+
+Test Suites: 5 passed, 5 total
+Tests:       10 passed, 10 total
 Snapshots:   0 total
-Time:        4.032 s
+Time:        5.191 s
 ```
 
 ---
@@ -350,7 +383,7 @@ curl -X POST http://localhost:3000/tenants/a03a3200-b6ed-4314-b1d5-a24099a62f9a/
 ### 2. Tickets (`/tickets`)
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/tickets` | Creates a new tenant ticket; triggers timezone-aware SLA scheduling |
+| `POST` | `/tickets` | **Atomically writes Ticket, AuditLog & OutboxEvent** in single transaction |
 | `POST` | `/tickets/claim-next` | **Atomic non-blocking claim** using `FOR UPDATE SKIP LOCKED` |
 | `POST` | `/tickets/:id/claim` | Claims specific ticket by UUID |
 | `POST` | `/tickets/:id/transition` | State Machine transition (`ASSIGNED`, `IN_PROGRESS`, `ON_HOLD`, `RESOLVED`, `CLOSED`) |

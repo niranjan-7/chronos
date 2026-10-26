@@ -19,6 +19,8 @@ import {
   getSlaWarningJobId,
 } from '../src/modules/sla/constants/sla.constants';
 import { SlaJobPayload } from '../src/modules/sla/interfaces/sla-job-payload.interface';
+import { OutboxRelayService } from '../src/modules/outbox/services/outbox-relay.service';
+import { ConfigService } from '@nestjs/config';
 
 describe('SLA Orchestration Engine Integration (Redis BullMQ + PostgreSQL)', () => {
   let prisma: PrismaService;
@@ -29,6 +31,7 @@ describe('SLA Orchestration Engine Integration (Redis BullMQ + PostgreSQL)', () 
   let eventListener: SlaEventListener;
   let eventEmitter: EventEmitter2;
   let ticketsService: TicketsService;
+  let outboxRelayService: OutboxRelayService;
 
   let testTenantId: string;
   const testTenantSlug = `sla-integration-${Date.now()}`;
@@ -62,8 +65,17 @@ describe('SLA Orchestration Engine Integration (Redis BullMQ + PostgreSQL)', () 
     );
 
     eventEmitter = new EventEmitter2();
-    eventEmitter.on('ticket.created', (event) => eventListener.handleTicketCreated(event));
-    eventEmitter.on('ticket.transitioned', (event) => eventListener.handleTicketTransitioned(event));
+    const configService = new ConfigService();
+    outboxRelayService = new OutboxRelayService(
+      prisma,
+      configService,
+      queue,
+      slaPolicyService,
+      calendarCalculator,
+      tenantCalendarService,
+      eventEmitter,
+    );
+    await outboxRelayService.onModuleInit();
 
     const stateMachine = new TicketStateMachine();
     const ticketsRepo = new TicketsRepository(prisma, cls, stateMachine);
@@ -83,6 +95,9 @@ describe('SLA Orchestration Engine Integration (Redis BullMQ + PostgreSQL)', () 
   });
 
   afterAll(async () => {
+    if (outboxRelayService) {
+      await outboxRelayService.onModuleDestroy();
+    }
     if (testTenantId) {
       await prisma.tenant.delete({
         where: { id: testTenantId },

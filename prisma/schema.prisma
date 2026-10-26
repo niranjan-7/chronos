@@ -49,6 +49,13 @@ enum WebhookDeliveryStatus {
   DEAD_LETTER
 }
 
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  PUBLISHED
+  DEAD_LETTER
+}
+
 model Tenant {
   id        String       @id @default(uuid()) @db.Uuid
   name      String       @db.VarChar(255)
@@ -66,6 +73,7 @@ model Tenant {
   webhookDeliveryLogs  WebhookDeliveryLog[]
   businessCalendar     BusinessCalendar?
   holidays             TenantHoliday[]
+  outboxEvents         OutboxEvent[]
 
   @@map("tenants")
 }
@@ -245,3 +253,25 @@ model TenantHoliday {
   @@index([tenantId, date], name: "idx_holidays_tenant_date")
   @@map("tenant_holidays")
 }
+
+model OutboxEvent {
+  id            String       @id @default(uuid()) @db.Uuid
+  tenantId      String       @map("tenant_id") @db.Uuid
+  aggregateType String       @map("aggregate_type") @db.VarChar(64)
+  aggregateId   String       @map("aggregate_id") @db.Uuid
+  eventType     String       @map("event_type") @db.VarChar(128)
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  retryCount    Int          @default(0) @map("retry_count")
+  nextAttemptAt DateTime     @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  processedAt   DateTime?    @map("processed_at") @db.Timestamptz(6)
+  error         String?      @db.Text
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt], name: "idx_outbox_status_next_attempt")
+  @@index([tenantId, status], name: "idx_outbox_tenant_status")
+  @@map("outbox_events")
+}
+

@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ClsModule } from 'nestjs-cls';
 import { BullModule } from '@nestjs/bullmq';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ScheduleModule } from '@nestjs/schedule';
 import { v4 as uuidv4 } from 'uuid';
 import { CommonModule } from './common/common.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
@@ -10,6 +11,7 @@ import { TicketsModule } from './modules/tickets/tickets.module';
 import { SlaModule } from './modules/sla/sla.module';
 import { RoutingModule } from './modules/routing/routing.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { OutboxModule } from './modules/outbox/outbox.module';
 import { AppController } from './app.controller';
 import { REQUEST_ID_HEADER } from './common/constants/context.constants';
 
@@ -52,11 +54,13 @@ import { REQUEST_ID_HEADER } from './common/constants/context.constants';
       inject: [ConfigService],
     }),
     CommonModule,
+    ScheduleModule.forRoot(),
     TenantsModule,
     TicketsModule,
     SlaModule,
     RoutingModule,
     AnalyticsModule,
+    OutboxModule,
   ],
   controllers: [AppController],
 })

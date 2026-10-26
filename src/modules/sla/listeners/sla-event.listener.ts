@@ -28,10 +28,9 @@ export class SlaEventListener {
   ) {}
 
   /**
-   * Listens for ticket creation, resolves policy & tenant business calendar,
+   * Processes ticket creation, resolves policy & tenant business calendar,
    * calculates timezone-aware business deadlines, and enqueues delayed jobs in BullMQ.
    */
-  @OnEvent(TICKET_CREATED_EVENT)
   async handleTicketCreated(event: TicketCreatedEvent): Promise<void> {
     const { tenantId, ticketId, priority, slaPolicyId, createdAt } = event;
 
@@ -107,9 +106,8 @@ export class SlaEventListener {
   }
 
   /**
-   * Listens for status transitions and dynamically freezes/unfreezes SLA based on elapsed business hours.
+   * Processes status transitions and dynamically freezes/unfreezes SLA based on elapsed business hours.
    */
-  @OnEvent(TICKET_TRANSITIONED_EVENT)
   async handleTicketTransitioned(event: TicketTransitionedEvent): Promise<void> {
     const { tenantId, ticketId, previousStatus, newStatus, actorId } = event;
 
