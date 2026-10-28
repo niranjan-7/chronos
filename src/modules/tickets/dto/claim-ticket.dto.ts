@@ -2,7 +2,7 @@ import { IsEnum, IsOptional, IsUUID } from 'class-validator';
 import { TicketPriority } from '@prisma/client';
 
 export class ClaimNextTicketDto {
-  @IsUUID('4')
+  @IsUUID('all')
   @IsOptional()
   agentId?: string;
 
@@ -12,7 +12,7 @@ export class ClaimNextTicketDto {
 }
 
 export class ClaimSpecificTicketDto {
-  @IsUUID('4')
+  @IsUUID('all')
   @IsOptional()
   agentId?: string;
 }

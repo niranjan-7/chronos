@@ -11,7 +11,7 @@ export const DEFAULT_TENANTS: Tenant[] = [
     slug: 'acme-corp',
     personas: [
       {
-        id: '00000000-0000-0000-0000-000000000001',
+        id: '00000000-0000-4000-8000-000000000001',
         name: 'Alex Rivera (Admin)',
         email: 'alex.rivera@acme.corp',
         role: 'ADMIN',
@@ -19,7 +19,7 @@ export const DEFAULT_TENANTS: Tenant[] = [
         avatar: 'AR',
       },
       {
-        id: '00000000-0000-0000-0000-000000000002',
+        id: '00000000-0000-4000-8000-000000000002',
         name: 'Sarah Chen (Tier-3 WebRTC)',
         email: 'sarah.chen@acme.corp',
         role: 'AGENT',
@@ -33,7 +33,7 @@ export const DEFAULT_TENANTS: Tenant[] = [
         maxCapacity: 5,
       },
       {
-        id: '00000000-0000-0000-0000-000000000003',
+        id: '00000000-0000-4000-8000-000000000003',
         name: 'David Kim (Billing & API)',
         email: 'david.kim@acme.corp',
         role: 'AGENT',
@@ -49,12 +49,12 @@ export const DEFAULT_TENANTS: Tenant[] = [
     ],
   },
   {
-    id: 'b12b4300-c7fe-5425-c2e6-b35100b73g0b',
+    id: 'b12b4300-c7fe-4425-a2e6-b35100b73e0b',
     name: 'Stark Industries',
     slug: 'stark-industries',
     personas: [
       {
-        id: '00000000-0000-0000-0000-000000000010',
+        id: '00000000-0000-4000-8000-000000000010',
         name: 'Tony Stark (Admin)',
         email: 'tony@stark.corp',
         role: 'ADMIN',
@@ -62,7 +62,7 @@ export const DEFAULT_TENANTS: Tenant[] = [
         avatar: 'TS',
       },
       {
-        id: '00000000-0000-0000-0000-000000000011',
+        id: '00000000-0000-4000-8000-000000000011',
         name: 'Peter Parker (Support Specialist)',
         email: 'peter@stark.corp',
         role: 'AGENT',
@@ -78,12 +78,12 @@ export const DEFAULT_TENANTS: Tenant[] = [
     ],
   },
   {
-    id: 'c23c5400-d8gf-6536-d3f7-c46211c84h1c',
+    id: 'c23c5400-d8fe-4536-a3f7-c46211c84f1c',
     name: 'Globex Corp',
     slug: 'globex-corp',
     personas: [
       {
-        id: '00000000-0000-0000-0000-000000000020',
+        id: '00000000-0000-4000-8000-000000000020',
         name: 'Hank Scorpio (Executive)',
         email: 'hank@globex.corp',
         role: 'ADMIN',
@@ -91,7 +91,7 @@ export const DEFAULT_TENANTS: Tenant[] = [
         avatar: 'HS',
       },
       {
-        id: '00000000-0000-0000-0000-000000000021',
+        id: '00000000-0000-4000-8000-000000000021',
         name: 'Homer Simpson (Field Agent)',
         email: 'homer@globex.corp',
         role: 'AGENT',

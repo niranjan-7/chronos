@@ -11,7 +11,7 @@ export class TransitionTicketDto {
   @MaxLength(500)
   reason?: string;
 
-  @IsUUID('4')
+  @IsUUID('all')
   @IsOptional()
   assignedAgentId?: string;
 }
