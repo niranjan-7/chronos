@@ -154,7 +154,11 @@ export default function WorkspacePage() {
 
   // Atomic Claim Mutation
   const claimMutation = useMutation({
-    mutationFn: () => claimNextTicket({ requiredSkills: activePersona.skills }),
+    mutationFn: () =>
+      claimNextTicket({
+        agentId: activePersona.id,
+        requiredSkills: activePersona.skills,
+      }),
     onSuccess: (newTicket) => {
       setClaimError(null);
       queryClient.setQueryData<Ticket[]>(['tickets', activeTenant.id], (old = []) => [
@@ -166,18 +170,28 @@ export default function WorkspacePage() {
     onError: (err: unknown) => {
       const message =
         typeof err === 'object' && err !== null && 'response' in err
-          ? (err as { response?: { data?: { message?: string } } }).response?.data?.message
+          ? (err as { response?: { data?: { message?: string | string[] } } }).response?.data?.message
           : undefined;
+      const formattedMessage = Array.isArray(message) ? message.join(', ') : message;
       setClaimError(
-        message || 'No available unassigned tickets found matching your skills in the pool.',
+        formattedMessage || 'No available unassigned tickets found matching your skills in the pool.',
       );
     },
   });
 
   // State Transition Mutation
   const transitionMutation = useMutation({
-    mutationFn: ({ id, newStatus, reason }: { id: string; newStatus: TicketStatus; reason?: string }) =>
-      transitionTicket(id, newStatus, reason),
+    mutationFn: ({
+      id,
+      newStatus,
+      reason,
+      assignedAgentId,
+    }: {
+      id: string;
+      newStatus: TicketStatus;
+      reason?: string;
+      assignedAgentId?: string;
+    }) => transitionTicket(id, newStatus, reason, assignedAgentId),
     onSuccess: (updated) => {
       queryClient.setQueryData<Ticket[]>(['tickets', activeTenant.id], (old = []) =>
         old.map((t) => (t.id === updated.id ? updated : t)),
@@ -189,9 +203,10 @@ export default function WorkspacePage() {
     onError: (err: unknown) => {
       const message =
         typeof err === 'object' && err !== null && 'response' in err
-          ? (err as { response?: { data?: { message?: string } } }).response?.data?.message
+          ? (err as { response?: { data?: { message?: string | string[] } } }).response?.data?.message
           : 'Invalid ticket state transition!';
-      alert(message);
+      const formattedMessage = Array.isArray(message) ? message.join(', ') : message;
+      alert(formattedMessage);
     },
   });
 
@@ -201,6 +216,7 @@ export default function WorkspacePage() {
       id: ticket.id,
       newStatus: 'ASSIGNED',
       reason: `Claimed directly by agent ${activePersona.name}`,
+      assignedAgentId: activePersona.id,
     });
   };
 

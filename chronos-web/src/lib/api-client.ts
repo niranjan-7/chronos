@@ -68,10 +68,12 @@ export async function transitionTicket(
   id: string,
   newStatus: TicketStatus,
   reason?: string,
+  assignedAgentId?: string,
 ): Promise<Ticket> {
   const { data } = await apiClient.post<Ticket>(`/tickets/${id}/transition`, {
     status: newStatus,
     reason,
+    assignedAgentId,
   });
   return data;
 }

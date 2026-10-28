@@ -88,7 +88,11 @@ export class TicketsService {
       );
     }
 
-    const result = await this.ticketsRepository.claimNextTicket(agentId, dto.preferredPriority);
+    const result = await this.ticketsRepository.claimNextTicket(
+      agentId,
+      dto.preferredPriority,
+      dto.requiredSkills,
+    );
 
     if (result.claimed && result.ticket) {
       this.eventEmitter.emit(

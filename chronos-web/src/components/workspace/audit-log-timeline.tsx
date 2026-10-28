@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { TicketAuditLog, TicketStatus } from '../../types/telemetry';
+import { DEFAULT_TENANTS } from '../../lib/tokens';
 import { Badge } from '../ui/badge';
 import {
   Clock,
@@ -47,6 +48,20 @@ export function AuditLogTimeline({ logs, ticketNumber }: AuditLogTimelineProps) 
       default:
         return <Clock className="w-3.5 h-3.5 text-slate-400" />;
     }
+  };
+
+  const formatActor = (actorId?: string | null) => {
+    if (!actorId) return 'System Worker';
+    if (actorId === 'system-routing-engine' || actorId.startsWith('system-r')) return 'System Auto-Router';
+    if (actorId === 'customer') return 'Customer (Portal)';
+    if (actorId === 'admin') return 'System Administrator';
+
+    for (const tenant of DEFAULT_TENANTS) {
+      const found = tenant.personas.find((p) => p.id === actorId);
+      if (found) return found.name;
+    }
+
+    return actorId.length > 12 ? `${actorId.slice(0, 8)}...` : actorId;
   };
 
   const getBadgeVariant = (status: TicketStatus) => {
@@ -131,7 +146,7 @@ export function AuditLogTimeline({ logs, ticketNumber }: AuditLogTimelineProps) 
 
                 <div className="flex flex-wrap items-center justify-between gap-2 mt-2 pt-2 border-t border-slate-900 text-[10px] font-mono text-slate-500">
                   <span>
-                    Actor: <span className="text-slate-400">{log.actorId ? log.actorId.slice(0, 8) : 'System Worker'}</span>
+                    Actor: <span className="text-slate-300 font-medium">{formatActor(log.actorId)}</span>
                   </span>
                   {log.slaRemainingMs !== null && log.slaRemainingMs !== undefined && (
                     <span className="text-cyan-400/90 flex items-center gap-1">

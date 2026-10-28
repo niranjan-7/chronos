@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { IsArray, IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
 import { TicketPriority } from '@prisma/client';
 
 export class ClaimNextTicketDto {
@@ -9,6 +9,11 @@ export class ClaimNextTicketDto {
   @IsEnum(TicketPriority)
   @IsOptional()
   preferredPriority?: TicketPriority;
+
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  requiredSkills?: string[];
 }
 
 export class ClaimSpecificTicketDto {

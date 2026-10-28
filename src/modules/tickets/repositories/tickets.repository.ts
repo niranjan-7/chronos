@@ -45,20 +45,64 @@ export class TicketsRepository extends TenantAwareRepository<
   async claimNextTicket(
     agentId: string,
     preferredPriority?: TicketPriority,
+    requiredSkills?: string[],
   ): Promise<ClaimResult> {
     const tenantId = this.getTenantId();
 
     return this.prisma.$transaction(async (tx) => {
       // 1. Atomically query and lock candidate row with SKIP LOCKED
+      const hasSkills = requiredSkills && requiredSkills.length > 0;
+
       const rows = preferredPriority
+        ? hasSkills
+          ? await tx.$queryRaw<LockedTicketRow[]>`
+              SELECT id, ticket_number, priority, status, assigned_agent_id
+              FROM tickets
+              WHERE tenant_id = ${tenantId}::uuid
+                AND status = 'OPEN'::"TicketStatus"
+                AND assigned_agent_id IS NULL
+                AND priority = ${preferredPriority}::"TicketPriority"
+                AND (
+                  required_skills = '{}'
+                  OR cardinality(required_skills) = 0
+                  OR required_skills <@ ${requiredSkills}::text[]
+                )
+              ORDER BY created_at ASC
+              LIMIT 1
+              FOR UPDATE SKIP LOCKED;
+            `
+          : await tx.$queryRaw<LockedTicketRow[]>`
+              SELECT id, ticket_number, priority, status, assigned_agent_id
+              FROM tickets
+              WHERE tenant_id = ${tenantId}::uuid
+                AND status = 'OPEN'::"TicketStatus"
+                AND assigned_agent_id IS NULL
+                AND priority = ${preferredPriority}::"TicketPriority"
+              ORDER BY created_at ASC
+              LIMIT 1
+              FOR UPDATE SKIP LOCKED;
+            `
+        : hasSkills
         ? await tx.$queryRaw<LockedTicketRow[]>`
             SELECT id, ticket_number, priority, status, assigned_agent_id
             FROM tickets
             WHERE tenant_id = ${tenantId}::uuid
               AND status = 'OPEN'::"TicketStatus"
               AND assigned_agent_id IS NULL
-              AND priority = ${preferredPriority}::"TicketPriority"
-            ORDER BY created_at ASC
+              AND (
+                required_skills = '{}'
+                OR cardinality(required_skills) = 0
+                OR required_skills <@ ${requiredSkills}::text[]
+              )
+            ORDER BY
+              CASE priority
+                WHEN 'URGENT' THEN 1
+                WHEN 'HIGH' THEN 2
+                WHEN 'MEDIUM' THEN 3
+                WHEN 'LOW' THEN 4
+                ELSE 5
+              END ASC,
+              created_at ASC
             LIMIT 1
             FOR UPDATE SKIP LOCKED;
           `
