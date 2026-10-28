@@ -36,9 +36,15 @@ export async function fetchLiveDashboardMetrics(): Promise<LiveDashboardMetrics>
 }
 
 // Tickets & Routing APIs
-export async function claimNextTicket(payload?: { requiredSkills?: string[] }): Promise<Ticket> {
-  const { data } = await apiClient.post<Ticket>('/tickets/claim-next', payload || {});
-  return data;
+export async function claimNextTicket(payload?: {
+  agentId?: string;
+  requiredSkills?: string[];
+}): Promise<Ticket> {
+  const { data } = await apiClient.post<{ claimed: boolean; ticket?: Ticket }>('/tickets/claim-next', payload || {});
+  if (!data?.ticket) {
+    throw new Error('No eligible tickets in queue for claiming.');
+  }
+  return data.ticket;
 }
 
 export async function fetchTickets(params?: {
@@ -46,8 +52,11 @@ export async function fetchTickets(params?: {
   priority?: string;
   limit?: number;
 }): Promise<Ticket[]> {
-  const { data } = await apiClient.get<Ticket[]>('/tickets', { params });
-  return data;
+  const { data } = await apiClient.get<Ticket[] | { items: Ticket[]; total: number }>('/tickets', { params });
+  if (Array.isArray(data)) {
+    return data;
+  }
+  return data?.items || [];
 }
 
 export async function fetchTicketById(id: string): Promise<Ticket> {
@@ -61,7 +70,7 @@ export async function transitionTicket(
   reason?: string,
 ): Promise<Ticket> {
   const { data } = await apiClient.post<Ticket>(`/tickets/${id}/transition`, {
-    newStatus,
+    status: newStatus,
     reason,
   });
   return data;

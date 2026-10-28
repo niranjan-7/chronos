@@ -137,11 +137,11 @@ export function ChaosSimulatorDrawer() {
 
     const startTime = performance.now();
     const mockAgents = [
-      '00000000-0000-0000-0000-000000000001',
-      '00000000-0000-0000-0000-000000000002',
-      '00000000-0000-0000-0000-000000000003',
-      '00000000-0000-0000-0000-000000000004',
-      '00000000-0000-0000-0000-000000000005',
+      '00000000-0000-4000-8000-000000000001',
+      '00000000-0000-4000-8000-000000000002',
+      '00000000-0000-4000-8000-000000000003',
+      '00000000-0000-4000-8000-000000000004',
+      '00000000-0000-4000-8000-000000000005',
     ];
 
     // Fire 50 simultaneous claim promises
@@ -151,11 +151,13 @@ export function ChaosSimulatorDrawer() {
       try {
         const res = await apiClient.post('/tickets/claim-next', { agentId });
         const latency = Math.round(performance.now() - slotStart);
+        const ticket = res.data?.ticket || res.data;
+        const isClaimed = !!(ticket?.id || res.data?.claimed);
         return {
           slot: idx + 1,
           agentId,
-          claimedTicketNumber: res.data?.ticketNumber,
-          status: (res.data?.id ? 'CLAIMED' : 'NO_TICKET_AVAILABLE') as 'CLAIMED' | 'NO_TICKET_AVAILABLE',
+          claimedTicketNumber: ticket?.ticketNumber,
+          status: (isClaimed ? 'CLAIMED' : 'NO_TICKET_AVAILABLE') as 'CLAIMED' | 'NO_TICKET_AVAILABLE',
           latencyMs: latency,
         };
       } catch {
